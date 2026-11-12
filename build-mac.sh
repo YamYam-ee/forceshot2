@@ -2,7 +2,8 @@
 # Bygger TRK ForceShot 2 för macOS och paketerar den som en .app.
 # Körs PÅ EN MAC (kräver Xcode Command Line Tools och Rust):
 #
-#   ./build-mac.sh
+#   ./build-mac.sh              för den egna Macens processor
+#   UNIVERSAL=1 ./build-mac.sh  för både Apple Silicon och Intel
 #
 # OBS: skriptet är skrivet men ännu inte provkört på en riktig Mac.
 #
@@ -15,13 +16,21 @@ cd "$(dirname "$0")"
 
 # Utanför Windows gäller inte sökvägen i .cargo/config.toml.
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/target}"
-cargo build --release
 
 VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
 APP="dist/TRK ForceShot.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$CARGO_TARGET_DIR/release/TRK-ForceShot" "$APP/Contents/MacOS/TRK-ForceShot"
+if [ "${UNIVERSAL:-0}" = "1" ]; then
+  # En fil som går på både Apple Silicon och Intel.
+  export MACOSX_DEPLOYMENT_TARGET=12.3
+  cargo build --release --target aarch64-apple-darwin
+  cargo build --release --target x86_64-apple-darwin
+  lipo -create -output "$APP/Contents/MacOS/TRK-ForceShot"     "$CARGO_TARGET_DIR/aarch64-apple-darwin/release/TRK-ForceShot"     "$CARGO_TARGET_DIR/x86_64-apple-darwin/release/TRK-ForceShot"
+else
+  cargo build --release
+  cp "$CARGO_TARGET_DIR/release/TRK-ForceShot" "$APP/Contents/MacOS/TRK-ForceShot"
+fi
 
 # Ikon i alla storlekar macOS vill ha. (Plattan fyller hela bilden; Apples mall har lite luft runt.)
 ICONSET=$(mktemp -d)/icon.iconset

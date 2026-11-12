@@ -1,0 +1,46 @@
+# Bygger Mac-versionen på GitHubs Mac-maskiner och lägger filen i en utgåva.
+# Startas för hand: Actions > Mac-bygge > Run workflow, och ange utgåvans tagg.
+name: Mac-bygge
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Utgåvans tagg som filen ska läggas i, t.ex. v2.2.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  bygg:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust för både Apple Silicon och Intel
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: Tester
+        run: cargo test --release
+      - name: Bygg appen
+        run: UNIVERSAL=1 bash build-mac.sh
+      - name: Packa
+        id: packa
+        run: |
+          VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          ZIP="TRK-ForceShot-mac-$VERSION.zip"
+          ditto -c -k --keepParent "dist/TRK ForceShot.app" "$ZIP"
+          shasum -a 256 "$ZIP"
+          lipo -archs "dist/TRK ForceShot.app/Contents/MacOS/TRK-ForceShot"
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: ${{ steps.packa.outputs.zip }}
+      - name: Lägg filen i utgåvan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: gh release upload "$TAG" "${{ steps.packa.outputs.zip }}" --clobber --repo "$GITHUB_REPOSITORY"
