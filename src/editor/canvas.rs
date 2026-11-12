@@ -68,6 +68,22 @@ pub struct Canvas {
     pub crop: Option<Rect>,
     /// Svetsmarkör eller film som dubbelklickats och ska visas i ändringsrutan.
     pub edit_dialog: Option<u64>,
+    /// Arbetsytans guide medan dess storlek dras: storleken i bildens enheter.
+    guide_size: Option<Vec2>,
+}
+
+/// Pekaren för ett storlekshandtag: pilarna pekar åt det håll kanten flyttas, även när
+/// objektet är vridet.
+fn resize_cursor(ex: i8, ey: i8, rot: f32) -> CursorIcon {
+    let v = super::doc::rotate(vec2(ex as f32, ey as f32), rot);
+    // Vinkeln i åttondelar av ett halvt varv: 0 = vågrätt, 2 = lodrätt.
+    let step = (v.y.atan2(v.x) / std::f32::consts::FRAC_PI_4).round() as i32;
+    match step.rem_euclid(4) {
+        0 => CursorIcon::ResizeHorizontal,
+        1 => CursorIcon::ResizeNwSe,
+        2 => CursorIcon::ResizeVertical,
+        _ => CursorIcon::ResizeNeSw,
+    }
 }
 
 fn chaikin(pts: &[Pos2]) -> Vec<Pos2> {
@@ -90,7 +106,7 @@ fn color_image(img: &image::RgbaImage) -> egui::ColorImage {
 
 impl Canvas {
     pub fn new() -> Self {
-        Self { tool: Tool::Select, drag: Drag::None, editing: None, focus_edit: false, tex: HashMap::new(), base_tex: HashMap::new(), crop: None, edit_dialog: None }
+        Self { tool: Tool::Select, drag: Drag::None, editing: None, focus_edit: false, tex: HashMap::new(), base_tex: HashMap::new(), crop: None, edit_dialog: None, guide_size: None }
     }
 
     pub fn set_tool(&mut self, tool: Tool, doc: Option<&mut Doc>) {
@@ -676,6 +692,15 @@ impl Canvas {
             ctx.memory_mut(|m| m.surrender_focus(resp.id));
         }
         self.keyboard(&ctx, doc);
+        // En gång till efter musen, så att en ruta som just gjorts smalare visar sin nya höjd direkt.
+        for el in &mut doc.els {
+            if let Kind::Text(td) = &el.kind {
+                let h = draw::text_height(&ctx, el, td, xf.s);
+                let r = el.rect();
+                el.a = r.min;
+                el.b = pos2(r.max.x, r.min.y + h);
+            }
+        }
 
         // ----- Ritning -----
         self.sync_textures(&ctx, doc);
@@ -700,11 +725,14 @@ impl Canvas {
         let clip = if doc.space { rect } else { img_rect.intersect(rect) };
         painter.with_clip_rect(clip).extend(shapes);
         if doc.space {
-            let g = img_rect;
+            let g = match self.guide_size {
+                Some(s) => Rect::from_min_size(img_rect.min, s * xf.s),
+                None => img_rect,
+            };
             let pts = [g.left_top(), g.right_top(), g.right_bottom(), g.left_bottom(), g.left_top()];
             painter.extend(Shape::dashed_line(&pts, Stroke::new(1.5, theme::ACCENT_DEEP), 8.0, 6.0));
-            // Etiketten är också handtaget som flyttar guiden. Storleken är fast.
-            let label = painter.layout_no_wrap("Guide – det här blir bilden · dra här för att flytta".into(), FontId::proportional(11.5), Color32::WHITE);
+            // Etiketten är handtaget som flyttar guiden; hörnet nere till höger ändrar storleken.
+            let label = painter.layout_no_wrap("Guide – det här blir bilden · dra här för att flytta · dra i hörnet för storlek".into(), FontId::proportional(11.5), Color32::WHITE);
             let chip = Rect::from_min_size(g.left_top() - vec2(0.0, label.size().y + 10.0), label.size() + vec2(14.0, 6.0));
             let grip = ui.interact(chip.intersect(rect), ui.scope_id().with(("guide", doc.uid)), Sense::drag());
             if grip.drag_started() {
@@ -718,6 +746,36 @@ impl Canvas {
             }
             painter.rect_filled(chip, 5.0, if grip.hovered() || grip.dragged() { theme::ACCENT } else { theme::ACCENT_DEEP });
             painter.galley(chip.min + vec2(7.0, 3.0), label, Color32::WHITE);
+
+            // Storlekshandtaget. Skift behåller proportionen.
+            let knob = Rect::from_center_size(g.right_bottom(), Vec2::splat(14.0));
+            let size_grip = ui.interact(knob.expand(4.0).intersect(rect), ui.scope_id().with(("guidestorlek", doc.uid)), Sense::drag());
+            if size_grip.dragged() {
+                if let Some(p) = ip {
+                    let base = doc.size();
+                    let mut s = vec2((p.x).clamp(40.0, 8000.0), (p.y).clamp(40.0, 8000.0));
+                    if shift {
+                        let k = (s.x / base.x).max(s.y / base.y);
+                        s = vec2((base.x * k).clamp(40.0, 8000.0), (base.y * k).clamp(40.0, 8000.0));
+                    }
+                    self.guide_size = Some(vec2(s.x.round(), s.y.round()));
+                }
+            }
+            if size_grip.drag_stopped() {
+                if let Some(s) = self.guide_size.take() {
+                    doc.resize_guide(s.x as u32, s.y as u32);
+                }
+            }
+            let active = size_grip.hovered() || size_grip.dragged();
+            if active {
+                ctx.set_cursor_icon(CursorIcon::ResizeNwSe);
+                let s = self.guide_size.unwrap_or(doc.size());
+                let t = painter.layout_no_wrap(format!("{} × {}", s.x as u32, s.y as u32), FontId::new(12.0, theme::bold()), theme::TEXT);
+                let tag = Rect::from_min_size(knob.max + vec2(4.0, 4.0), t.size() + vec2(12.0, 6.0));
+                painter.rect_filled(tag, 5.0, Color32::from_rgba_unmultiplied(0x12, 0x14, 0x18, 0xE6));
+                painter.galley(tag.min + vec2(6.0, 3.0), t, theme::TEXT);
+            }
+            painter.rect(knob, 3.0, Color32::WHITE, Stroke::new(2.0, if active { theme::ACCENT } else { theme::ACCENT_DEEP }), StrokeKind::Middle);
         }
 
         // Markering och handtag.
@@ -757,9 +815,19 @@ impl Canvas {
                         painter.rect(hr, 2.0, Color32::WHITE, Stroke::new(1.5, theme::ACCENT), StrokeKind::Middle);
                     }
                     if ip.is_some_and(|p| p.distance(hp) <= 9.0 / doc.zoom) {
-                        cursor = if h == Handle::Rotate { CursorIcon::Alias } else { CursorIcon::Grab };
+                        cursor = match h {
+                            Handle::Rotate => CursorIcon::Alias,
+                            Handle::Edge(ex, ey) => resize_cursor(ex, ey, el.rot),
+                            Handle::A | Handle::B => CursorIcon::Grab,
+                        };
                     }
                 }
+            }
+        }
+        // Pekaren behåller sin form under hela dragningen, även när den hamnar vid sidan av handtaget.
+        if let Drag::Handle { id, h: Handle::Edge(ex, ey), .. } = &self.drag {
+            if let Some(el) = doc.get(*id) {
+                cursor = resize_cursor(*ex, *ey, el.rot);
             }
         }
         if let Drag::Handle { id, h: Handle::Rotate, .. } = &self.drag {
@@ -849,5 +917,22 @@ impl Canvas {
             }
             ctx.set_cursor_icon(cursor);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resize_cursors_follow_the_edge_and_the_rotation() {
+        assert_eq!(resize_cursor(1, 0, 0.0), CursorIcon::ResizeHorizontal);
+        assert_eq!(resize_cursor(-1, 0, 0.0), CursorIcon::ResizeHorizontal);
+        assert_eq!(resize_cursor(0, 1, 0.0), CursorIcon::ResizeVertical);
+        assert_eq!(resize_cursor(1, 1, 0.0), CursorIcon::ResizeNwSe);
+        assert_eq!(resize_cursor(-1, -1, 0.0), CursorIcon::ResizeNwSe);
+        assert_eq!(resize_cursor(1, -1, 0.0), CursorIcon::ResizeNeSw);
+        // En ruta vriden ett kvarts varv: sidokanten flyttas nu i höjdled.
+        assert_eq!(resize_cursor(1, 0, std::f32::consts::FRAC_PI_2), CursorIcon::ResizeVertical);
     }
 }

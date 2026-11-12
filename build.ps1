@@ -5,7 +5,7 @@
 #                                     den körs. Det är den man skickar vidare.
 #
 #   .\build.ps1                  bygger med versionen som står i Cargo.toml
-#   .\build.ps1 -Version 2.2.1   stämplar en ny version först
+#   .\build.ps1 -Version 2.2.2   stämplar en ny version först
 #   .\build.ps1 -Test            kör dessutom enhetstesterna
 #
 # Kräver Rust (rustup).

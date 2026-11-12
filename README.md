@@ -48,9 +48,9 @@ version med en Setup-fil bifogad visas en ruta med *Ladda ner och uppdatera*,
 
 Så här lägger du upp en ny version:
 
-1. `.\build.ps1 -Version 2.2.1`
-2. Skapa en release i repot med taggen `v2.2.1`.
-3. Bifoga `dist\TRK ForceShot Setup 2.2.1.exe`.
+1. `.\build.ps1 -Version 2.2.2`
+2. Skapa en release i repot med taggen `v2.2.2`.
+3. Bifoga `dist\TRK ForceShot Setup 2.2.2.exe`.
 4. Beskrivningen är det användaren ser som "vad som är nytt".
 
 Version 1 har sitt eget repo för utgåvor (`YamYam-ee/forceshot`), så de två
@@ -129,7 +129,8 @@ gemensam skala, Bottenskiss och Tankskiss.
   `<provningsnummer>-skiss-1`, `-2` … i valt format, kvalitet och bredd.
 - **Arbetsyta / ForceSpace** (plusknappen → *Ny arbetsyta*): en vit yta där allt
   får ligga var som helst. Den streckade guiden (565 × 744) är det som blir bild.
-  Guiden flyttas genom att dra i dess etikett; storleken är fast.
+  Guiden flyttas genom att dra i dess etikett och ändrar storlek med handtaget i
+  nedre högra hörnet (Skift behåller proportionen).
 - **Förstora** (*Mer → Förstora*): 2×, 3× eller 4× med bildtyperna skärmklipp,
   inskannat dokument och foto. Annoteringarna följer med.
 - **Komprimera** (*Mer → Komprimera och spara*): mindre JPEG med vald största
@@ -154,7 +155,6 @@ gemensam skala, Bottenskiss och Tankskiss.
 ### Skillnader mot version 1
 
 - Förstora och komprimera saknar förhandsvisning före/efter.
-- Arbetsytans guide kan flyttas men inte ändra storlek.
 - Radera element finns bara som ruta, inte som pensel.
 - OCR kan inte byta ut en rad i bilden.
 - Snabbtangenter ändras genom att skriva kombinationen som text.

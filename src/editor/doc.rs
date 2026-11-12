@@ -375,6 +375,17 @@ impl Doc {
         self.dirty = true;
     }
 
+    /// Ger arbetsytans guide en ny storlek. Övre vänstra hörnet ligger kvar, så innehållet
+    /// behåller sin plats.
+    pub fn resize_guide(&mut self, w: u32, h: u32) {
+        let (w, h) = (w.clamp(40, 8000), h.clamp(40, 8000));
+        if (w, h) == (self.base.width(), self.base.height()) {
+            return;
+        }
+        self.checkpoint();
+        self.base = Arc::new(RgbaImage::from_pixel(w, h, image::Rgba([255, 255, 255, 255])));
+    }
+
     /// Sparar läget före en ändring.
     pub fn checkpoint(&mut self) {
         self.undo.push(Snap { base: self.base.clone(), els: self.els.clone() });
