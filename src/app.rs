@@ -305,10 +305,15 @@ impl App {
     /// Visar redigerarfönstret, och skapar det om det inte finns.
     fn show_editor(&mut self, el: &ActiveEventLoop) {
         if let Some(w) = self.editor_window() {
-            w.window.set_minimized(false);
-            w.window.set_visible(true);
-            platform::force_foreground(&w.window);
-            w.window.request_redraw();
+            let (window, vid) = (w.window.clone(), w.vid);
+            let hidden = window.is_visible() == Some(false);
+            window.set_minimized(false);
+            window.set_visible(true);
+            if hidden {
+                self.revive(vid, &window);
+            }
+            platform::force_foreground(&window);
+            window.request_redraw();
             return;
         }
         let mut attrs = Window::default_attributes()
@@ -331,12 +336,26 @@ impl App {
     }
 
     /// Göm eller visa fönstren med utdragna flikar (de ska inte komma med i ett klipp).
-    fn show_detached(&self, visible: bool) {
-        for w in self.wins.values().filter(|w| w.kind == Kind::Detached) {
-            w.window.set_visible(visible);
+    fn show_detached(&mut self, visible: bool) {
+        let list: Vec<(Arc<Window>, ViewportId)> = self.wins.values().filter(|w| w.kind == Kind::Detached).map(|w| (w.window.clone(), w.vid)).collect();
+        for (window, vid) in list {
+            let hidden = window.is_visible() == Some(false);
+            window.set_visible(visible);
             if visible {
-                w.window.request_redraw();
+                if hidden {
+                    self.revive(vid, &window);
+                }
+                window.request_redraw();
             }
+        }
+    }
+
+    /// Ett fönster som varit gömt får en ny rityta. Den gamla slutar visa nya bilder när
+    /// fönstret göms, och då står den sista bilden kvar fast allt ritas som vanligt.
+    fn revive(&mut self, vid: ViewportId, window: &Arc<Window>) {
+        let _ = pollster::block_on(self.painter.set_window(vid, None));
+        if let Err(e) = pollster::block_on(self.painter.set_window(vid, Some(window.clone()))) {
+            log::error!("Kunde inte skapa ritytan på nytt: {e}");
         }
     }
 
@@ -587,6 +606,9 @@ impl App {
 
     fn paint(&mut self, id: WindowId, el: &ActiveEventLoop) {
         let Some(win) = self.wins.get_mut(&id) else { return };
+        if std::env::var_os("FORCESHOT_LOGG").is_some() && win.kind == Kind::Editor {
+            eprintln!("ritar redigeraren: {} flikar, synlig={:?}", self.editor.tabs.len(), win.window.is_visible());
+        }
         let mut input = win.state.take_egui_input(&win.window);
         input.time = Some(self.start.elapsed().as_secs_f64());
         let kind = win.kind;
@@ -655,14 +677,12 @@ impl App {
                             let img = crate::capture::compose(&o.shots, rect);
                             self.deliver(img, then, el);
                         }
-                        _ => {
-                            // Avbrutet klipp som startades från redigeraren: visa den igen.
-                            if !self.editor.tabs.is_empty() {
-                                if let Some(w) = self.editor_window() {
-                                    w.window.set_visible(true);
-                                }
-                            }
-                        }
+                        _ => {}
+                    }
+                    // Klippet startades från redigeraren, som gömdes under tiden: visa den igen,
+                    // även när klippet avbröts eller gick till urklipp eller fil.
+                    if self.editor_window().is_some_and(|w| w.window.is_visible() == Some(false)) {
+                        self.show_editor(el);
                     }
                 }
             }
@@ -731,6 +751,8 @@ impl ApplicationHandler<UserEvent> for App {
             Some((mode, out)) if mode == "fiber" => self.editor.fiber_demo(out, &self.settings),
             Some((mode, out)) if mode == "pdf" => self.editor.pdf_demo(out, &self.settings),
             Some((mode, _)) if mode == "flik" => self.editor.detach_demo(&self.settings),
+            // Samma väg som knappen "Klipp ett område" på startskärmen.
+            Some((mode, _)) if mode == "knapp" => self.editor.requests.push(Request::Capture(Action::Region)),
             Some((_, out)) => self.editor.space_demo(out),
             None => {}
         }

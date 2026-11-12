@@ -150,6 +150,10 @@ impl Overlay {
         let clamp = |p: Pos2| pos2(p.x.clamp(bounds.min.x, bounds.max.x), p.y.clamp(bounds.min.y, bounds.max.y));
 
         let resp = ui.allocate_rect(full, Sense::click_and_drag());
+        // Utvecklingsläge: ta den förvalda markeringen direkt, som ett tryck på Redigera.
+        if std::env::var_os("FORCESHOT_AUTOTA").is_some() && self.sel.is_some() {
+            self.take(Then::Editor);
+        }
         let painter = ui.painter_at(full);
         painter.image(tex_id, full, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
 
