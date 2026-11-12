@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-labelledby="title">
+  <title id="title">TRK ForceShot (small)</title>
+  <!-- small-size cut: full-bleed tile, flat colours, geometry snapped to a 2-unit grid (= 1 px at 16 px) -->
+  <rect width="32" height="32" rx="7" fill="#1B1E24"/>
+  <g fill="none" stroke="#2DD4BF" stroke-width="4" stroke-linejoin="round">
+    <path d="M6 14V6H13"/>
+    <path d="M26 18V26H19"/>
+  </g>
+  <path d="M21 3L8 18H15L11 29L24 14H17Z" fill="#FFFFFF"/>
+</svg>

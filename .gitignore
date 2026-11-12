@@ -1,0 +1,7 @@
+target/
+dist/
+# Lokal byggmapp (sökväg på den egna datorn)
+.cargo/config.toml
+# Skärmbilder med det egna skrivbordet i
+docs/redigeraren.png
+docs/bottenskiss.png

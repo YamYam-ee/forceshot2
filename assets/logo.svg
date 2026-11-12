@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title">
+  <title id="title">TRK ForceShot</title>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#262B34"/>
+      <stop offset="1" stop-color="#16181D"/>
+    </linearGradient>
+    <linearGradient id="teal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2DD4BF"/>
+      <stop offset="1" stop-color="#0EA5A4"/>
+    </linearGradient>
+  </defs>
+  <!-- tile -->
+  <rect x="4" y="4" width="248" height="248" rx="56" fill="url(#tile)"/>
+  <!-- capture frame: two opposite crop corners -->
+  <g id="frame" fill="none" stroke="url(#teal)" stroke-width="20" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M54 108V66A12 12 0 0 1 66 54H108"/>
+    <path d="M202 148V190A12 12 0 0 1 190 202H148"/>
+  </g>
+  <!-- bolt: the shot, striking through the open diagonal of the frame -->
+  <path id="bolt" d="M158 40L82 142H122L98 216L174 114H134Z" fill="#F2F5F7" stroke="#F2F5F7" stroke-width="8" stroke-linejoin="round"/>
+</svg>
