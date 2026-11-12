@@ -284,6 +284,10 @@ impl App {
     }
 
     fn add_window(&mut self, window: Window, kind: Kind) -> Option<WindowId> {
+        // Utvecklingsläge: provfönster läggs överst, så att skriptade klick träffar dem.
+        if std::env::var_os("FORCESHOT_OVERST").is_some() {
+            window.set_window_level(WindowLevel::AlwaysOnTop);
+        }
         let window = Arc::new(window);
         let vid = ViewportId::from_hash_of(("fönster", self.next_vid));
         self.next_vid += 1;
@@ -606,8 +610,12 @@ impl App {
 
     fn paint(&mut self, id: WindowId, el: &ActiveEventLoop) {
         let Some(win) = self.wins.get_mut(&id) else { return };
-        if std::env::var_os("FORCESHOT_LOGG").is_some() && win.kind == Kind::Editor {
-            eprintln!("ritar redigeraren: {} flikar, synlig={:?}", self.editor.tabs.len(), win.window.is_visible());
+        if std::env::var_os("FORCESHOT_LOGG").is_some() {
+            match win.kind {
+                Kind::Editor => eprintln!("ritar redigeraren: {} flikar, synlig={:?}", self.editor.tabs.len(), win.window.is_visible()),
+                Kind::Detached => eprintln!("ritar eget fönster: {:?} flikar", self.extra.get(&id).map(|e| e.tabs.len())),
+                _ => {}
+            }
         }
         let mut input = win.state.take_egui_input(&win.window);
         input.time = Some(self.start.elapsed().as_secs_f64());
@@ -750,6 +758,7 @@ impl ApplicationHandler<UserEvent> for App {
         match startup.dev.clone() {
             Some((mode, out)) if mode == "fiber" => self.editor.fiber_demo(out, &self.settings),
             Some((mode, out)) if mode == "pdf" => self.editor.pdf_demo(out, &self.settings),
+            Some((mode, _)) if mode == "slapp" => self.editor.drop_demo(),
             Some((mode, _)) if mode == "flik" => self.editor.detach_demo(&self.settings),
             // Samma väg som knappen "Klipp ett område" på startskärmen.
             Some((mode, _)) if mode == "knapp" => self.editor.requests.push(Request::Capture(Action::Region)),
@@ -836,6 +845,9 @@ impl ApplicationHandler<UserEvent> for App {
 
     fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         let Some(win) = self.wins.get_mut(&id) else { return };
+        if std::env::var_os("FORCESHOT_LOGG").is_some() && win.kind == Kind::Detached && !matches!(event, WindowEvent::RedrawRequested) {
+            eprintln!("händelse i eget fönster: {}", format!("{event:?}").chars().take(40).collect::<String>());
+        }
         if matches!(event, WindowEvent::RedrawRequested) {
             self.repaint_at.remove(&id);
             self.paint(id, el);

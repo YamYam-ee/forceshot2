@@ -230,6 +230,14 @@ impl Editor {
         self.send_tab(1, super::Dest::New, None);
     }
 
+    /// Utvecklingsläge: fönstrets enda flik släpps utanför fönstret, som när den dras ut.
+    pub fn drop_demo(&mut self) {
+        self.space_demo(None);
+        let at: Vec<f32> = std::env::var("FORCESHOT_SLAPP").unwrap_or_default().split(',').filter_map(|n| n.trim().parse().ok()).collect();
+        let at = if at.len() == 2 { pos2(at[0], at[1]) } else { pos2(1500.0, 300.0) };
+        self.send_tab(0, super::Dest::Drop, Some(at));
+    }
+
     /// Utvecklingsläge: en arbetsyta med innehåll både i och utanför guiden.
     pub fn space_demo(&mut self, out: Option<PathBuf>) {
         self.new_space();

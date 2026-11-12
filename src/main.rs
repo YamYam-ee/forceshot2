@@ -118,6 +118,7 @@ fn main() {
             "--fiberdemo" => (startup.dev, dev) = (Some(("fiber".into(), args.next().map(PathBuf::from))), true),
             "--pdfdemo" => (startup.dev, dev) = (Some(("pdf".into(), args.next().map(PathBuf::from))), true),
             "--knappdemo" => (startup.dev, dev) = (Some(("knapp".into(), None)), true),
+            "--slappdemo" => (startup.dev, dev) = (Some(("slapp".into(), None)), true),
             "--flikdemo" => (startup.dev, dev) = (Some(("flik".into(), None)), true),
             "--ytademo" => (startup.dev, dev) = (Some(("yta".into(), args.next().map(PathBuf::from))), true),
             "--demo-ut" => (startup.demo, dev) = (Some(args.next().map(PathBuf::from)), true),
