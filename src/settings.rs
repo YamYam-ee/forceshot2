@@ -151,7 +151,8 @@ pub struct Settings {
     pub numbering: Numbering,
     pub methods: Vec<Method>,
     pub style: ToolStyle,
-    pub last_region: Option<(usize, [u32; 4])>,
+    /// Senaste markeringen i skrivbordets enheter (x, y, b, h).
+    pub last_area: Option<[i32; 4]>,
     /// GitHub-repot som utgåvorna hämtas från, som `ägare/repo`. Tomt = ingen uppdateringskoll.
     pub update_repo: String,
     pub check_updates: bool,
@@ -179,7 +180,7 @@ impl Default for Settings {
             numbering: Numbering::PerMetod,
             methods: default_methods(),
             style: ToolStyle::default(),
-            last_region: None,
+            last_area: None,
             update_repo: DEFAULT_UPDATE_REPO.into(),
             check_updates: true,
             skipped_update: String::new(),

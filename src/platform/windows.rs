@@ -6,7 +6,7 @@ use image::RgbaImage;
 use std::ptr::null_mut;
 use std::sync::{Arc, Mutex, OnceLock};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
-use windows_sys::Win32::Graphics::Dwm::{DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
+use windows_sys::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
@@ -204,11 +204,51 @@ pub fn send_mail(path: &std::path::Path) -> Result<(), String> {
 
 /// Det aktiva fönstrets synliga ram (utan den osynliga skuggkanten), i skrivbordets enheter.
 pub fn active_window_rect() -> Option<(i32, i32, i32, i32)> {
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.is_null() { None } else { frame_rect(hwnd) }
+}
+
+unsafe extern "system" fn window_proc(hwnd: HWND, data: LPARAM) -> i32 {
     unsafe {
-        let hwnd = GetForegroundWindow();
-        if hwnd.is_null() {
-            return None;
+        let list = &mut *(data as *mut Vec<[i32; 4]>);
+        if IsWindowVisible(hwnd) == 0 || IsIconic(hwnd) != 0 {
+            return 1;
         }
+        // Genomklickbara lager (inspelningsramar, spelöverlägg) är inga fönster att klippa.
+        if GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TRANSPARENT != 0 {
+            return 1;
+        }
+        // Dolda appfönster och fönster på andra skrivbord räknas som synliga men är "cloaked".
+        let mut cloaked: u32 = 0;
+        DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED as u32, &mut cloaked as *mut _ as *mut _, 4);
+        if cloaked != 0 {
+            return 1;
+        }
+        // Skrivbordet självt täcker alla skärmar och ska inte väljas med ett klick.
+        let mut class = [0u16; 64];
+        let n = GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32).max(0) as usize;
+        let name = String::from_utf16_lossy(&class[..n]);
+        if name == "Progman" || name == "WorkerW" {
+            return 1;
+        }
+        if let Some((x, y, w, h)) = frame_rect(hwnd) {
+            list.push([x, y, w, h]);
+        }
+        1
+    }
+}
+
+/// De synliga fönstrens ramar i skrivbordets enheter, det översta först.
+pub fn window_rects() -> Vec<[i32; 4]> {
+    let mut list: Vec<[i32; 4]> = Vec::new();
+    unsafe {
+        EnumWindows(Some(window_proc), &mut list as *mut _ as LPARAM);
+    }
+    list
+}
+
+fn frame_rect(hwnd: HWND) -> Option<(i32, i32, i32, i32)> {
+    unsafe {
         let mut r: RECT = std::mem::zeroed();
         let ok = DwmGetWindowAttribute(
             hwnd,

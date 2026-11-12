@@ -231,11 +231,14 @@ pub fn enlarge(img: &RgbaImage, factor: u32, mode: Enhance) -> RgbaImage {
     }
 }
 
-/// En ensidig PDF med bilden som JPEG. Sidan får måtten bilden har vid 150 punkter per
-/// tum, så att den blir lika stor igen när filen öppnas här.
+/// En ensidig PDF med bilden som JPEG.
 pub fn pdf_page(jpeg: &[u8], width: u32, height: u32) -> Vec<u8> {
-    let (pw, ph) = (width as f32 * 72.0 / 150.0, height as f32 * 72.0 / 150.0);
-    let content = format!("q {pw:.2} 0 0 {ph:.2} 0 0 cm /Im0 Do Q");
+    pdf_pages(&[(jpeg.to_vec(), width, height)])
+}
+
+/// En PDF med en JPEG-bild per sida. Varje sida får måtten bilden har vid 150 punkter
+/// per tum, så att den blir lika stor igen när filen öppnas här.
+pub fn pdf_pages(pages: &[(Vec<u8>, u32, u32)]) -> Vec<u8> {
     let mut out: Vec<u8> = b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n".to_vec();
     let mut offsets = Vec::new();
     let mut object = |out: &mut Vec<u8>, head: String, stream: Option<&[u8]>| {
@@ -248,15 +251,23 @@ pub fn pdf_page(jpeg: &[u8], width: u32, height: u32) -> Vec<u8> {
         }
         out.extend_from_slice(b"endobj\n");
     };
+    // Objekt 1 och 2 är katalogen och sidlistan; sedan tre objekt per sida.
+    let kids: Vec<String> = (0..pages.len()).map(|i| format!("{} 0 R", 3 + 3 * i)).collect();
     object(&mut out, "<< /Type /Catalog /Pages 2 0 R >>".into(), None);
-    object(&mut out, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(), None);
-    object(&mut out, format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pw:.2} {ph:.2}] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>"), None);
-    object(&mut out, format!("<< /Length {} >>", content.len()), Some(content.as_bytes()));
-    object(
-        &mut out,
-        format!("<< /Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {} >>", jpeg.len()),
-        Some(jpeg),
-    );
+    object(&mut out, format!("<< /Type /Pages /Kids [{}] /Count {} >>", kids.join(" "), pages.len()), None);
+    for (i, (jpeg, width, height)) in pages.iter().enumerate() {
+        let n = 3 + 3 * i;
+        // Ett uns extra, så att sidan inte tappar en bildpunkt när måttet räknas tillbaka och kapas.
+        let (pw, ph) = (*width as f64 * 0.48 + 0.0005, *height as f64 * 0.48 + 0.0005);
+        let content = format!("q {pw:.4} 0 0 {ph:.4} 0 0 cm /Im0 Do Q");
+        object(&mut out, format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pw:.4} {ph:.4}] /Resources << /XObject << /Im0 {} 0 R >> >> /Contents {} 0 R >>", n + 2, n + 1), None);
+        object(&mut out, format!("<< /Length {} >>", content.len()), Some(content.as_bytes()));
+        object(
+            &mut out,
+            format!("<< /Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {} >>", jpeg.len()),
+            Some(jpeg),
+        );
+    }
     let xref = out.len();
     out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len() + 1).as_bytes());
     for o in &offsets {
@@ -376,6 +387,24 @@ mod tests {
         assert_eq!(page.dimensions(), (300, 200));
         let p = page.get_pixel(150, 100);
         assert!((p[0] as i32 - 10).abs() < 12 && (p[1] as i32 - 120).abs() < 12 && (p[2] as i32 - 220).abs() < 12, "{p:?}");
+    }
+
+    #[test]
+    fn several_pages_keep_their_order_and_sizes() {
+        let page = |w: u32, h: u32, c: [u8; 3]| {
+            let img = image::RgbImage::from_pixel(w, h, image::Rgb(c));
+            let mut jpeg = Vec::new();
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 90).encode_image(&img).unwrap();
+            (jpeg, w, h)
+        };
+        let bytes = pdf_pages(&[page(300, 200, [220, 30, 30]), page(150, 400, [30, 200, 30]), page(640, 480, [30, 30, 220])]);
+        let pdf = crate::pdf::parse(bytes).expect("ska gå att läsa");
+        assert_eq!(crate::pdf::page_count(&pdf), 3);
+        let sizes: Vec<_> = (0..3).map(|i| crate::pdf::render_page(&pdf, i).expect("ska gå att rita")).collect();
+        assert_eq!(sizes[0].dimensions(), (300, 200));
+        assert_eq!(sizes[1].dimensions(), (150, 400));
+        assert_eq!(sizes[2].dimensions(), (640, 480));
+        assert!(sizes[0].get_pixel(10, 10)[0] > 180 && sizes[1].get_pixel(10, 10)[1] > 160 && sizes[2].get_pixel(10, 10)[2] > 180);
     }
 
     #[test]

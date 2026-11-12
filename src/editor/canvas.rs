@@ -702,8 +702,21 @@ impl Canvas {
             let g = img_rect;
             let pts = [g.left_top(), g.right_top(), g.right_bottom(), g.left_bottom(), g.left_top()];
             painter.extend(Shape::dashed_line(&pts, Stroke::new(1.5, theme::ACCENT_DEEP), 8.0, 6.0));
-            let label = painter.layout_no_wrap("Guide – det här blir bilden".into(), FontId::proportional(11.5), theme::ACCENT_DEEP);
-            painter.galley(g.left_top() - vec2(0.0, label.size().y + 4.0), label, theme::ACCENT_DEEP);
+            // Etiketten är också handtaget som flyttar guiden. Storleken är fast.
+            let label = painter.layout_no_wrap("Guide – det här blir bilden · dra här för att flytta".into(), FontId::proportional(11.5), Color32::WHITE);
+            let chip = Rect::from_min_size(g.left_top() - vec2(0.0, label.size().y + 10.0), label.size() + vec2(14.0, 6.0));
+            let grip = ui.interact(chip.intersect(rect), ui.scope_id().with(("guide", doc.uid)), Sense::drag());
+            if grip.drag_started() {
+                doc.checkpoint();
+            }
+            if grip.dragged() {
+                doc.move_guide(grip.drag_delta());
+            }
+            if grip.hovered() || grip.dragged() {
+                ctx.set_cursor_icon(CursorIcon::Move);
+            }
+            painter.rect_filled(chip, 5.0, if grip.hovered() || grip.dragged() { theme::ACCENT } else { theme::ACCENT_DEEP });
+            painter.galley(chip.min + vec2(7.0, 3.0), label, Color32::WHITE);
         }
 
         // Markering och handtag.

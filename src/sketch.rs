@@ -115,18 +115,22 @@ pub struct SketchTab {
     shown: Option<bool>,
     bounds: [f32; 4],
     created: Option<std::time::Instant>,
+    /// Fönstret webbvyn sitter i.
+    host: Option<winit::window::WindowId>,
 }
 
 impl SketchTab {
     pub fn new(uid: u64, info: &SketchInfo) -> Self {
-        Self { uid, title: info.name.clone(), sketch_id: info.id.clone(), view: None, px_per_cm: 0.0, error: None, shown: None, bounds: [0.0; 4], created: None }
+        Self { uid, title: info.name.clone(), sketch_id: info.id.clone(), view: None, px_per_cm: 0.0, error: None, shown: None, bounds: [0.0; 4], created: None, host: None }
     }
 
     /// Skapar webbvyn första gången fliken visas.
     pub fn ensure(&mut self, window: &winit::window::Window, on_message: impl Fn(u64, String) + 'static) {
+        self.rehost(window);
         if self.view.is_some() || self.error.is_some() {
             return;
         }
+        self.host = Some(window.id());
         let start = catalog().into_iter().find(|s| s.id == self.sketch_id).map(|s| s.start).unwrap_or_else(|| "index.html".into());
         let url = if cfg!(windows) {
             format!("http://skiss.localhost/{}/{}", self.sketch_id, start)
@@ -149,6 +153,40 @@ impl SketchTab {
             }
             Err(e) => self.error = Some(format!("Kunde inte starta webbvyn: {e}")),
         }
+    }
+
+    /// Flyttar webbvyn till ett annat fönster när fliken har bytt fönster.
+    fn rehost(&mut self, window: &winit::window::Window) {
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        let Some(view) = &self.view else { return };
+        if self.host == Some(window.id()) {
+            return;
+        }
+        self.host = Some(window.id());
+        let Ok(handle) = window.window_handle() else { return };
+        let moved: Result<(), String> = match handle.as_raw() {
+            #[cfg(windows)]
+            RawWindowHandle::Win32(h) => {
+                use wry::WebViewExtWindows;
+                view.reparent(h.hwnd.get()).map_err(|e| e.to_string())
+            }
+            #[cfg(target_os = "macos")]
+            RawWindowHandle::AppKit(h) => {
+                use objc2::msg_send;
+                use objc2::runtime::AnyObject;
+                use wry::WebViewExtMacOS;
+                let ns_view = h.ns_view.as_ptr() as *mut AnyObject;
+                let ns_window: *mut AnyObject = unsafe { msg_send![ns_view, window] };
+                view.reparent(ns_window as *mut _).map_err(|e| e.to_string())
+            }
+            _ => Err("fönstertypen stöds inte".into()),
+        };
+        if let Err(e) = moved {
+            self.error = Some(format!("Kunde inte flytta skissen till det nya fönstret: {e}"));
+        }
+        // Läge och synlighet sätts om i det nya fönstret.
+        self.bounds = [0.0; 4];
+        self.shown = None;
     }
 
     /// Utvecklingsläge: kör skriptet i miljövariabeln FORCESHOT_SKISSTEST en gång, tre

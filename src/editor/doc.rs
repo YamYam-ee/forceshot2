@@ -360,6 +360,18 @@ impl Doc {
         Rect::from_min_size(Pos2::ZERO, self.size())
     }
 
+    /// Flyttar arbetsytans guide `d` skärmpunkter. Guiden är bilden själv, så i stället
+    /// flyttas allt innehåll åt andra hållet och vyn följer med: på skärmen ligger
+    /// innehållet still medan guiden rör sig.
+    pub fn move_guide(&mut self, d: Vec2) {
+        let step = d / self.zoom.max(1e-3);
+        for el in &mut self.els {
+            el.translate(-step);
+        }
+        self.pan += d;
+        self.dirty = true;
+    }
+
     /// Sparar läget före en ändring.
     pub fn checkpoint(&mut self) {
         self.undo.push(Snap { base: self.base.clone(), els: self.els.clone() });

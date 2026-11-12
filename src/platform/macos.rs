@@ -47,6 +47,16 @@ pub fn active_window_rect() -> Option<(i32, i32, i32, i32)> {
     Some((w.x().ok()?, w.y().ok()?, w.width().ok()? as i32, w.height().ok()? as i32))
 }
 
+/// De synliga fönstrens ramar i punkter, det översta först.
+pub fn window_rects() -> Vec<[i32; 4]> {
+    let Ok(windows) = xcap::Window::all() else { return Vec::new() };
+    windows
+        .into_iter()
+        .filter(|w| !w.is_minimized().unwrap_or(true))
+        .filter_map(|w| Some([w.x().ok()?, w.y().ok()?, w.width().ok()? as i32, w.height().ok()? as i32]))
+        .collect()
+}
+
 pub fn force_foreground(window: &winit::window::Window) {
     window.focus_window();
 }

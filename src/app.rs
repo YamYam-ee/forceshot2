@@ -3,7 +3,7 @@
 //! tills något behövs, och drar då inga grafikresurser.
 
 use crate::capture::{Outcome, Overlay, Then};
-use crate::editor::{Editor, Env, Request};
+use crate::editor::{Dest, Editor, Env, Request, Tab};
 use crate::platform::{self, Action, Hotkeys, Shot};
 use crate::settings::{AfterCapture, Settings};
 use crate::{imaging, install, sketch, theme};
@@ -40,6 +40,8 @@ pub enum UserEvent {
 enum Kind {
     Overlay(usize),
     Editor,
+    /// Ett eget fönster med flikar som dragits ut ur huvudfönstret.
+    Detached,
     Setup,
 }
 
@@ -77,6 +79,8 @@ pub struct App {
     settings: Settings,
     overlay: Option<Overlay>,
     editor: Editor,
+    /// Redigerarna i de egna fönstren.
+    extra: HashMap<WindowId, Editor>,
     tray: Option<TrayIcon>,
     hotkeys: Option<Hotkeys>,
     startup: Option<Startup>,
@@ -215,6 +219,7 @@ pub fn run(startup: Startup) {
         settings: Settings::load(),
         overlay: None,
         editor: Editor::new(),
+        extra: HashMap::new(),
         tray: None,
         hotkeys: None,
         startup: Some(startup),
@@ -325,6 +330,95 @@ impl App {
         }
     }
 
+    /// Göm eller visa fönstren med utdragna flikar (de ska inte komma med i ett klipp).
+    fn show_detached(&self, visible: bool) {
+        for w in self.wins.values().filter(|w| w.kind == Kind::Detached) {
+            w.window.set_visible(visible);
+            if visible {
+                w.window.request_redraw();
+            }
+        }
+    }
+
+    fn icon() -> Option<winit::window::Icon> {
+        let (rgba, w, h) = icon_rgba(include_bytes!("../assets/icon-256.png"))?;
+        winit::window::Icon::from_rgba(rgba, w, h).ok()
+    }
+
+    /// En flik har lämnat sitt fönster: lägg den i fönstret den släpptes på, eller i ett nytt.
+    fn move_tab(&mut self, el: &ActiveEventLoop, src: Option<WindowId>, tab: Tab, dest: Dest, at: Option<egui::Pos2>) {
+        let src_id = src.or_else(|| self.wins.iter().find(|(_, w)| w.kind == Kind::Editor).map(|(id, _)| *id));
+        let src_win = src_id.and_then(|id| self.wins.get(&id)).map(|w| w.window.clone());
+        // Släppunkten på skrivbordet, i fysiska bildpunkter.
+        let mut point = src_win.as_ref().and_then(|w| {
+            let (p, o, s) = (at?, w.inner_position().ok()?, w.scale_factor());
+            Some((o.x + (p.x as f64 * s) as i32, o.y + (p.y as f64 * s) as i32))
+        });
+        #[cfg(windows)]
+        if point.is_none() && dest == Dest::Drop {
+            point = Some(platform::cursor_pos());
+        }
+        let under = |(x, y): (i32, i32)| {
+            self.wins.iter().find(|(id, w)| {
+                let editor = matches!(w.kind, Kind::Editor | Kind::Detached) && Some(**id) != src_id && w.window.is_visible().unwrap_or(true);
+                let (Ok(o), s) = (w.window.outer_position(), w.window.outer_size()) else { return false };
+                editor && x >= o.x && y >= o.y && x < o.x + s.width as i32 && y < o.y + s.height as i32
+            })
+        };
+        // Some(None) = huvudfönstret, Some(Some(id)) = ett eget fönster, None = ett nytt.
+        let target = match dest {
+            Dest::Main => Some(None),
+            Dest::New => None,
+            Dest::Drop => point.and_then(under).map(|(id, w)| (w.kind == Kind::Detached).then_some(*id)),
+        };
+        match target {
+            Some(None) => {
+                self.editor.adopt(tab);
+                self.show_editor(el);
+            }
+            Some(Some(id)) => {
+                if let (Some(e), Some(w)) = (self.extra.get_mut(&id), self.wins.get(&id)) {
+                    e.adopt(tab);
+                    platform::force_foreground(&w.window);
+                    w.window.request_redraw();
+                }
+            }
+            None => {
+                // Enda fliken i ett eget fönster: det finns inget att dra ut den ur.
+                if let Some(e) = src.and_then(|id| self.extra.get_mut(&id)).filter(|e| e.tabs.is_empty()) {
+                    e.adopt(tab);
+                    return;
+                }
+                let size = src_win.as_ref().map(|w| w.inner_size()).filter(|s| s.width > 200 && s.height > 200).unwrap_or(PhysicalSize::new(1320, 860));
+                let mut attrs = Window::default_attributes()
+                    .with_title("TRK ForceShot")
+                    .with_inner_size(size)
+                    .with_min_inner_size(LogicalSize::new(820.0, 520.0))
+                    .with_window_icon(Self::icon());
+                if let (Some((x, y)), Dest::Drop) = (point, dest) {
+                    attrs = attrs.with_position(PhysicalPosition::new(x - 160, y - 24));
+                }
+                let created = el.create_window(attrs).ok().and_then(|w| self.add_window(w, Kind::Detached));
+                match created {
+                    Some(id) => {
+                        self.extra.insert(id, Editor::detached_with(tab));
+                        if let Some(w) = self.wins.get(&id) {
+                            platform::force_foreground(&w.window);
+                        }
+                    }
+                    None => {
+                        // Fönstret gick inte att skapa: fliken får stanna i huvudfönstret.
+                        log::error!("Kunde inte skapa fönstret för fliken");
+                        self.editor.adopt(tab);
+                    }
+                }
+            }
+        }
+        for w in self.wins.values().filter(|w| matches!(w.kind, Kind::Editor | Kind::Detached)) {
+            w.window.request_redraw();
+        }
+    }
+
     fn close_window(&mut self, id: WindowId) {
         if let Some(w) = self.wins.remove(&id) {
             let _ = pollster::block_on(self.painter.set_window(w.vid, None));
@@ -375,9 +469,10 @@ impl App {
                 let img = imaging::crop(&s.image, ((x - s.x) as f32 * k) as i32, ((y - s.y) as f32 * k) as i32, (w as f32 * k) as i32, (h as f32 * k) as i32);
                 self.deliver(img, then, el);
             }
-            Action::LastRegion => match self.settings.last_region {
-                Some((m, r)) if m < shots.len() => {
-                    let img = imaging::crop(&shots[m].image, r[0] as i32, r[1] as i32, r[2] as i32, r[3] as i32);
+            Action::LastRegion => match self.settings.last_area {
+                // Området ska fortfarande ligga på någon skärm (en skärm kan ha kopplats ur).
+                Some(r) if shots.iter().any(|s| r[0] < s.x + s.w as i32 && r[0] + r[2] > s.x && r[1] < s.y + s.h as i32 && r[1] + r[3] > s.y) => {
+                    let img = crate::capture::compose(&shots, r);
                     self.deliver(img, then, el);
                 }
                 _ => self.open_overlay(shots, el),
@@ -387,6 +482,8 @@ impl App {
     }
 
     fn open_overlay(&mut self, shots: Vec<Shot>, el: &ActiveEventLoop) {
+        // Fönstren läses av innan överlägget läggs ovanpå dem.
+        let windows = platform::window_rects();
         let (cx, cy) = platform::cursor_pos();
         let mut focus = None;
         for (i, s) in shots.iter().enumerate() {
@@ -414,7 +511,7 @@ impl App {
                 }
             }
         }
-        self.overlay = Some(Overlay::new(shots, &self.settings));
+        self.overlay = Some(Overlay::new(shots, windows, &self.settings));
         if let Some(w) = focus.and_then(|id| self.wins.get(&id)) {
             platform::force_foreground(&w.window);
         }
@@ -440,27 +537,37 @@ impl App {
         }
     }
 
-    fn handle_requests(&mut self, el: &ActiveEventLoop) {
-        for r in std::mem::take(&mut self.editor.requests) {
+    /// Tar hand om det en redigerare bett om. `src` är dess fönster; `None` = huvudfönstret.
+    fn handle_requests(&mut self, el: &ActiveEventLoop, src: Option<WindowId>) {
+        let requests = match src {
+            None => std::mem::take(&mut self.editor.requests),
+            Some(id) => self.extra.get_mut(&id).map(|e| std::mem::take(&mut e.requests)).unwrap_or_default(),
+        };
+        for r in requests {
             match r {
                 Request::Capture(a) => {
                     // Redigeraren göms så att den inte kommer med i bilden.
                     if let Some(w) = self.editor_window() {
                         w.window.set_visible(false);
                     }
+                    self.show_detached(false);
                     std::thread::sleep(Duration::from_millis(220));
                     self.start_capture(a, el);
                     if self.overlay.is_none() {
+                        self.show_detached(true);
                         self.show_editor(el);
                     }
                 }
                 Request::CloseWindow => {
-                    let id = self.wins.iter().find(|(_, w)| w.kind == Kind::Editor).map(|(id, _)| *id);
+                    let id = src.or_else(|| self.wins.iter().find(|(_, w)| w.kind == Kind::Editor).map(|(id, _)| *id));
                     if let Some(id) = id {
+                        // Flikarna (och deras webbvyer) släpps före fönstret de sitter i.
+                        self.extra.remove(&id);
                         self.close_window(id);
                     }
                     self.settings.save();
                 }
+                Request::MoveTab { tab, dest, at } => self.move_tab(el, src, tab, dest, at),
                 Request::Quit => {
                     self.settings.save();
                     el.exit();
@@ -484,7 +591,7 @@ impl App {
         input.time = Some(self.start.elapsed().as_secs_f64());
         let kind = win.kind;
         let window = win.window.clone();
-        let (overlay, editor, settings, proxy, setup) = (&mut self.overlay, &mut self.editor, &mut self.settings, &self.proxy, &mut self.setup);
+        let (overlay, editor, extra, settings, proxy, setup) = (&mut self.overlay, &mut self.editor, &mut self.extra, &mut self.settings, &self.proxy, &mut self.setup);
         let out = self.ctx.run_ui(input, |ui| match kind {
             Kind::Overlay(i) => {
                 if let Some(o) = overlay.as_mut() {
@@ -492,6 +599,11 @@ impl App {
                 }
             }
             Kind::Editor => editor.ui(ui, settings, &Env { window: &window, proxy }),
+            Kind::Detached => {
+                if let Some(e) = extra.get_mut(&id) {
+                    e.ui(ui, settings, &Env { window: &window, proxy });
+                }
+            }
             Kind::Setup => {
                 if let Some(s) = setup.as_mut() {
                     s.ui(ui);
@@ -511,15 +623,36 @@ impl App {
             }
             Kind::Editor => {
                 self.editor.after_paint(&self.ctx, self.painter.render_state(), &self.settings);
-                self.handle_requests(el);
+                self.handle_requests(el, None);
+            }
+            Kind::Detached => {
+                let rs = self.painter.render_state();
+                if let Some(e) = self.extra.get_mut(&id) {
+                    e.after_paint(&self.ctx, rs, &self.settings);
+                }
+                self.handle_requests(el, Some(id));
+                // Sista fliken stängdes eller flyttades: då har fönstret inget kvar att visa.
+                if self.extra.get(&id).is_some_and(|e| e.tabs.is_empty()) {
+                    self.extra.remove(&id);
+                    self.close_window(id);
+                }
             }
             Kind::Overlay(_) => {
+                // En markering som ändrats ska ritas om på alla skärmar, inte bara den här.
+                if self.overlay.as_mut().is_some_and(|o| std::mem::take(&mut o.changed)) {
+                    for (wid, w) in self.wins.iter().filter(|(_, w)| matches!(w.kind, Kind::Overlay(_))) {
+                        if *wid != id {
+                            w.window.request_redraw();
+                        }
+                    }
+                }
                 if self.overlay.as_ref().is_some_and(|o| o.outcome.is_some()) {
                     let Some(mut o) = self.close_overlay() else { return };
+                    self.show_detached(true);
                     match o.outcome.take() {
-                        Some(Outcome::Take { monitor, rect, then }) => {
-                            self.settings.last_region = Some((monitor, rect));
-                            let img = imaging::crop(&o.shots[monitor].image, rect[0] as i32, rect[1] as i32, rect[2] as i32, rect[3] as i32);
+                        Some(Outcome::Take { rect, then }) => {
+                            self.settings.last_area = Some(rect);
+                            let img = crate::capture::compose(&o.shots, rect);
                             self.deliver(img, then, el);
                         }
                         _ => {
@@ -596,6 +729,8 @@ impl ApplicationHandler<UserEvent> for App {
         }
         match startup.dev.clone() {
             Some((mode, out)) if mode == "fiber" => self.editor.fiber_demo(out, &self.settings),
+            Some((mode, out)) if mode == "pdf" => self.editor.pdf_demo(out, &self.settings),
+            Some((mode, _)) if mode == "flik" => self.editor.detach_demo(&self.settings),
             Some((_, out)) => self.editor.space_demo(out),
             None => {}
         }
@@ -637,8 +772,12 @@ impl ApplicationHandler<UserEvent> for App {
             }
             UserEvent::TrayClick => self.show_editor(el),
             UserEvent::Sketch(uid, body) => {
+                // Skissen kan sitta i vilket fönster som helst; bara rätt redigerare känner igen den.
                 self.editor.on_sketch_message(uid, &body);
-                if let Some(w) = self.editor_window() {
+                for e in self.extra.values_mut() {
+                    e.on_sketch_message(uid, &body);
+                }
+                for w in self.wins.values().filter(|w| matches!(w.kind, Kind::Editor | Kind::Detached)) {
                     w.window.request_redraw();
                 }
             }
@@ -695,7 +834,14 @@ impl ApplicationHandler<UserEvent> for App {
                 Kind::Editor => {
                     self.editor.request_close();
                     win.window.request_redraw();
-                    self.handle_requests(el);
+                    self.handle_requests(el, None);
+                }
+                Kind::Detached => {
+                    win.window.request_redraw();
+                    if let Some(e) = self.extra.get_mut(&id) {
+                        e.request_close();
+                    }
+                    self.handle_requests(el, Some(id));
                 }
                 Kind::Overlay(_) => {
                     self.close_overlay();

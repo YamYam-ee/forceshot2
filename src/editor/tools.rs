@@ -24,11 +24,12 @@ pub struct Extras {
     enlarge: Option<EnlargeDialog>,
     compact: Option<CompactDialog>,
     map: Option<MapDialog>,
+    pdf: Option<PdfDialog>,
 }
 
 impl Extras {
     pub fn any_open(&self) -> bool {
-        self.sheet.is_some() || self.export.is_some() || self.enlarge.is_some() || self.compact.is_some() || self.map.is_some()
+        self.sheet.is_some() || self.export.is_some() || self.enlarge.is_some() || self.compact.is_some() || self.map.is_some() || self.pdf.is_some()
     }
 }
 
@@ -47,11 +48,24 @@ struct CompactDialog {
     quality: u8,
 }
 
+/// Vilka flikar som ska bli sidor: flikens nummer, namn och om den är med.
+struct PdfDialog {
+    picks: Vec<(u64, String, bool)>,
+}
+
+type MapMsg = (crate::map::View, RgbaImage, Option<String>);
+
 struct MapDialog {
     query: String,
     level: usize,
-    rx: Option<Receiver<Result<crate::map::MapResult, String>>>,
+    tiles: Arc<std::sync::Mutex<crate::map::Tiles>>,
+    rx: Option<Receiver<Result<MapMsg, String>>>,
     error: Option<String>,
+    /// Utsnittet användaren har dragit fram.
+    view: Option<crate::map::View>,
+    /// Utsnittet som den hämtade bilden visar.
+    shown: Option<(crate::map::View, RgbaImage, egui::TextureHandle)>,
+    place: String,
 }
 
 fn window<'a>(title: &'a str, open: &'a mut bool) -> egui::Window<'a> {
@@ -134,7 +148,20 @@ impl Editor {
     }
 
     pub fn open_map(&mut self) {
-        self.x.map = Some(MapDialog { query: String::new(), level: 1, rx: None, error: None });
+        self.x.map = Some(MapDialog { query: String::new(), level: 1, tiles: Default::default(), rx: None, error: None, view: None, shown: None, place: String::new() });
+    }
+
+    pub fn open_pdf_dialog(&mut self) {
+        let picks = self.tabs.iter().filter_map(|t| if let Tab::Doc(d) = t { Some((d.uid, d.title.clone(), true)) } else { None }).collect();
+        self.x.pdf = Some(PdfDialog { picks });
+    }
+
+    /// Köar en flersidig PDF av flikarna, i den ordning de anges.
+    pub fn queue_pdf(&mut self, path: PathBuf, uids: &[u64]) {
+        self.pdf_out = Some((path, Vec::new()));
+        for (i, uid) in uids.iter().enumerate() {
+            self.jobs.push(Job { uid: *uid, kind: JobKind::PdfPage { last: i + 1 == uids.len() }, warmed: false });
+        }
     }
 
     pub fn open_sheet_export(&mut self) {
@@ -177,8 +204,7 @@ impl Editor {
                 (format!("IMG_{:04}", 1201 + i), img)
             })
             .collect();
-        let docs = build_sheets("P-2026-0412", photos, self.next_uid + 1);
-        self.next_uid += docs.len() as u64 + 1;
+        let docs = build_sheets("P-2026-0412", photos, super::reserve_uids(64));
         for d in docs {
             if let Some(dir) = &out {
                 let path = dir.join(format!("{}.jpg", d.sheet.clone().unwrap_or_default()));
@@ -187,6 +213,21 @@ impl Editor {
             self.tabs.push(Tab::Doc(Box::new(d)));
         }
         self.active = 0;
+    }
+
+    /// Utvecklingsläge: två fiberblad sparas som en tvåsidig PDF.
+    pub fn pdf_demo(&mut self, out: Option<PathBuf>, settings: &Settings) {
+        self.fiber_demo(None, settings);
+        let uids: Vec<u64> = self.tabs.iter().map(|t| t.uid()).collect();
+        if let Some(path) = out {
+            self.queue_pdf(path, &uids);
+        }
+    }
+
+    /// Utvecklingsläge: två fiberblad, där det andra dras ut till ett eget fönster.
+    pub fn detach_demo(&mut self, settings: &Settings) {
+        self.fiber_demo(None, settings);
+        self.send_tab(1, super::Dest::New, None);
     }
 
     /// Utvecklingsläge: en arbetsyta med innehåll både i och utanför guiden.
@@ -211,6 +252,54 @@ impl Editor {
         self.enlarge_dialog(ctx);
         self.compact_dialog(ctx);
         self.map_dialog(ctx);
+        self.pdf_dialog(ctx);
+    }
+
+    fn pdf_dialog(&mut self, ctx: &egui::Context) {
+        let Some(dlg) = &mut self.x.pdf else { return };
+        let mut open = true;
+        let mut go = false;
+        window("Spara flikar som PDF", &mut open).show(ctx, |ui| {
+            ui.set_width(380.0);
+            dim(ui, "Varje ikryssad flik blir en sida, i flikarnas ordning.");
+            ui.add_space(4.0);
+            egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                for (n, (_, title, on)) in dlg.picks.iter_mut().enumerate() {
+                    ui.checkbox(on, format!("{}.  {}", n + 1, title.chars().take(44).collect::<String>()));
+                }
+            });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if ui.button("Alla").clicked() {
+                    dlg.picks.iter_mut().for_each(|p| p.2 = true);
+                }
+                if ui.button("Ingen").clicked() {
+                    dlg.picks.iter_mut().for_each(|p| p.2 = false);
+                }
+            });
+            ui.add_space(8.0);
+            let count = dlg.picks.iter().filter(|p| p.2).count();
+            ui.add_enabled_ui(count > 0, |ui| {
+                if icons::labeled(ui, Icon::Save, &format!("Spara {count} sidor som …"), true).clicked() {
+                    go = true;
+                }
+            });
+        });
+        if go {
+            let dlg = self.x.pdf.take().unwrap();
+            let uids: Vec<u64> = dlg.picks.iter().filter(|p| p.2).map(|p| p.0).collect();
+            let first = dlg.picks.iter().find(|p| p.2).map(|p| p.1.clone()).unwrap_or_default();
+            // "rapport.pdf – s. 1" ska föreslå "rapport.pdf".
+            let stem = first.split(" – s. ").next().unwrap_or("").trim_end_matches(".pdf").to_string();
+            let name = format!("{}.pdf", if stem.is_empty() { "sidor" } else { stem.as_str() });
+            if let Some(mut path) = rfd::FileDialog::new().set_file_name(name).add_filter("PDF", &["pdf"]).save_file() {
+                path.set_extension("pdf");
+                self.queue_pdf(path, &uids);
+                ctx.request_repaint();
+            }
+        } else if !open {
+            self.x.pdf = None;
+        }
     }
 
     fn sheet_dialog(&mut self, ctx: &egui::Context) {
@@ -272,9 +361,8 @@ impl Editor {
                     Err(_) => failed += 1,
                 }
             }
-            let first_uid = self.next_uid + 1;
+            let first_uid = super::reserve_uids(4096);
             let docs = build_sheets(&dlg.number, photos, first_uid);
-            self.next_uid += docs.len() as u64 + 1;
             let n = docs.len();
             let first_tab = self.tabs.len();
             for d in docs {
@@ -436,75 +524,176 @@ impl Editor {
     }
 
     fn map_dialog(&mut self, ctx: &egui::Context) {
+        use crate::map::{self, View};
         let Some(dlg) = &mut self.x.map else { return };
-        let mut arrived = None;
         if let Some(rx) = &dlg.rx {
             if let Ok(r) = rx.try_recv() {
                 dlg.rx = None;
                 match r {
-                    Ok(m) => arrived = Some(m),
-                    Err(e) => dlg.error = Some(e),
+                    Ok((view, image, place)) => {
+                        let ci = egui::ColorImage::from_rgba_unmultiplied([image.width() as usize, image.height() as usize], image.as_raw());
+                        let tex = ctx.load_texture("karta", ci, egui::TextureOptions::LINEAR);
+                        if let Some(p) = place {
+                            // En ny sökning: utsnittet börjar på platsen.
+                            dlg.place = p;
+                            dlg.view = Some(view);
+                        }
+                        dlg.shown = Some((view, image, tex));
+                    }
+                    Err(e) => {
+                        // Gå tillbaka till det som faktiskt visas, så att hämtningen inte görs om i en slinga.
+                        dlg.view = dlg.shown.as_ref().map(|s| s.0);
+                        dlg.error = Some(e);
+                    }
                 }
             }
         }
         let mut open = true;
-        let mut go = false;
+        let (mut search, mut insert) = (false, false);
         let busy = dlg.rx.is_some();
         window("Karta", &mut open).show(ctx, |ui| {
-            ui.set_width(430.0);
-            let field = ui.add(egui::TextEdit::singleline(&mut dlg.query).hint_text("Adress, t.ex. Staffanstorp Meteorgatan 9").desired_width(410.0));
-            let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            ui.set_width(500.0);
+            ui.horizontal(|ui| {
+                let field = ui.add(egui::TextEdit::singleline(&mut dlg.query).hint_text("Adress, t.ex. Staffanstorp Meteorgatan 9").desired_width(410.0));
+                let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                ui.add_enabled_ui(!busy && !dlg.query.trim().is_empty(), |ui| {
+                    if ui.button("Sök").clicked() || (enter && !busy) {
+                        search = true;
+                    }
+                });
+            });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 dim(ui, "Utsnitt");
-                for (i, (name, _)) in crate::map::LEVELS.iter().enumerate() {
-                    if chip(ui, name, dlg.level == i, None).clicked() {
+                for (i, (name, zoom)) in map::LEVELS.iter().enumerate() {
+                    let selected = dlg.view.map_or(dlg.level == i, |v| v.zoom == *zoom);
+                    if chip(ui, name, selected, None).clicked() {
                         dlg.level = i;
+                        dlg.view = dlg.view.map(|v| v.with_zoom(*zoom));
                     }
                 }
+                if let Some(v) = &mut dlg.view {
+                    if icons::sized_button(ui, Icon::Plus, "Zooma in", false, 26.0).clicked() {
+                        *v = v.with_zoom(v.zoom + 1);
+                    }
+                    if ui.add(egui::Button::new("−").min_size(Vec2::splat(26.0))).on_hover_text("Zooma ut").clicked() {
+                        *v = v.with_zoom(v.zoom.saturating_sub(1));
+                    }
+                }
+                if busy {
+                    ui.spinner();
+                }
             });
+            ui.add_space(6.0);
+
+            // Förhandsvisningen: dra för att flytta utsnittet, rulla för att zooma.
+            let size = vec2(500.0, 500.0 * map::HEIGHT as f32 / map::WIDTH as f32);
+            let k = size.x / map::WIDTH as f32;
+            let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::drag());
+            let painter = ui.painter_at(rect);
+            painter.rect_filled(rect, 6.0, Color32::from_rgb(0xE8, 0xE8, 0xE8));
+            if let (Some(view), Some((sv, _, tex))) = (dlg.view.as_mut(), &dlg.shown) {
+                if resp.dragged() {
+                    let d = resp.drag_delta();
+                    *view = view.moved(-(d.x / k) as f64, -(d.y / k) as f64);
+                }
+                if resp.hovered() {
+                    let steps: i32 = ui.input(|i| {
+                        i.events
+                            .iter()
+                            .map(|e| match e {
+                                egui::Event::MouseWheel { delta, .. } if delta.y > 0.0 => 1,
+                                egui::Event::MouseWheel { delta, .. } if delta.y < 0.0 => -1,
+                                _ => 0,
+                            })
+                            .sum()
+                    });
+                    if steps != 0 {
+                        *view = view.with_zoom((view.zoom as i32 + steps.clamp(-1, 1)).max(0) as u32);
+                    }
+                    ui.ctx().set_cursor_icon(if resp.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
+                }
+                // Bilden ritas förskjuten och skalad tills den nya har hämtats.
+                let f = 2f64.powi(view.zoom as i32 - sv.zoom as i32);
+                let off = vec2(((sv.x * f - view.x) as f32) * k, ((sv.y * f - view.y) as f32) * k);
+                let r = Rect::from_center_size(rect.center() + off, size * f as f32);
+                painter.image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                let g = painter.layout_no_wrap(map::ATTRIBUTION.into(), FontId::proportional(10.5), Color32::BLACK);
+                let tag = Rect::from_min_size(rect.max - g.size() - vec2(10.0, 6.0), g.size() + vec2(8.0, 4.0));
+                painter.rect_filled(tag, 0.0, Color32::from_rgba_unmultiplied(255, 255, 255, 215));
+                painter.galley(tag.min + vec2(4.0, 2.0), g, Color32::BLACK);
+            } else {
+                let text = if busy { "Hämtar kartan …" } else { "Sök en adress så visas kartan här" };
+                painter.text(rect.center(), egui::Align2::CENTER_CENTER, text, FontId::proportional(13.0), Color32::from_gray(0x60));
+            }
             ui.add_space(4.0);
-            dim(ui, "Kartan hämtas från OpenStreetMap och läggs in som ett objekt du kan flytta och ändra storlek på. Adressen skickas till OpenStreetMaps söktjänst.");
+            if dlg.place.is_empty() {
+                dim(ui, "Kartan hämtas från OpenStreetMap. Adressen skickas till OpenStreetMaps söktjänst.");
+            } else {
+                dim(ui, &dlg.place.chars().take(90).collect::<String>());
+                dim(ui, "Dra i kartan för att flytta utsnittet och rulla för att zooma. Det du ser är det som läggs in.");
+            }
             if let Some(e) = &dlg.error {
                 ui.label(RichText::new(e.as_str()).color(theme::DANGER));
             }
             ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.add_enabled_ui(!busy && !dlg.query.trim().is_empty(), |ui| {
-                    if icons::labeled(ui, Icon::Plus, "Lägg in", true).clicked() || (enter && !busy) {
-                        go = true;
-                    }
-                });
-                if busy {
-                    ui.spinner();
-                    dim(ui, "Hämtar kartan …");
+            let ready = !busy && dlg.view.is_some() && dlg.shown.as_ref().map(|s| s.0) == dlg.view;
+            ui.add_enabled_ui(ready, |ui| {
+                if icons::labeled(ui, Icon::Plus, "Lägg in", true).clicked() {
+                    insert = true;
                 }
             });
         });
-        if go {
+
+        let spawn = |dlg: &mut MapDialog, query: Option<String>, view: Option<View>, zoom: u32| {
             let (tx, rx) = std::sync::mpsc::channel();
-            let (query, zoom, ctx2) = (dlg.query.clone(), crate::map::LEVELS[dlg.level].1, ctx.clone());
+            let (tiles, ctx2) = (dlg.tiles.clone(), ctx.clone());
             std::thread::spawn(move || {
-                let _ = tx.send(crate::map::fetch(&query, zoom));
+                let work = || -> Result<MapMsg, String> {
+                    let mut tiles = tiles.lock().map_err(|_| "Kartan gick inte att hämta.".to_string())?;
+                    match (query, view) {
+                        (Some(q), _) => {
+                            let (lat, lon, place) = tiles.locate(&q)?;
+                            let v = View::at(lat, lon, zoom);
+                            Ok((v, tiles.render(v)?, Some(place)))
+                        }
+                        (None, Some(v)) => Ok((v, tiles.render(v)?, None)),
+                        (None, None) => Err("Inget utsnitt valt.".into()),
+                    }
+                };
+                let _ = tx.send(work());
                 ctx2.request_repaint();
             });
             dlg.rx = Some(rx);
             dlg.error = None;
+        };
+        if search {
+            let zoom = dlg.view.map_or(map::LEVELS[dlg.level].1, |v| v.zoom);
+            let query = dlg.query.clone();
+            spawn(dlg, Some(query), None, zoom);
+        } else if !busy && !ctx.input(|i| i.pointer.any_down()) {
+            // Utsnittet har flyttats eller zoomats: hämta bilden som hör till det.
+            let shown = dlg.shown.as_ref().map(|s| s.0);
+            if let Some(v) = dlg.view.filter(|v| shown != Some(*v)) {
+                spawn(dlg, None, Some(v), v.zoom);
+            }
         }
-        if let Some(m) = arrived {
-            self.x.map = None;
-            self.paste_image(m.image);
+
+        if insert {
+            let Some(dlg) = self.x.map.take() else { return };
+            let Some((_, image, _)) = dlg.shown else { return };
+            self.paste_image(image);
             // OpenStreetMaps villkor kräver att upphovet står i bilden.
             if let Some(d) = self.doc() {
                 if let Some(map_el) = d.sel.first().and_then(|id| d.get(*id)).cloned() {
                     let r = map_el.rect();
                     let size = (r.width() * 0.022).clamp(9.0, 16.0);
                     let label = Rect::from_min_size(pos2(r.max.x - size * 9.6, r.max.y - size * 1.9), vec2(size * 9.4, size * 1.7));
-                    let text = TextData { text: crate::map::ATTRIBUTION.into(), size, box_fill: Some(Color32::from_rgba_unmultiplied(255, 255, 255, 215)), box_border: None, align: 0 };
+                    let text = TextData { text: map::ATTRIBUTION.into(), size, box_fill: Some(Color32::from_rgba_unmultiplied(255, 255, 255, 215)), box_border: None, align: 0 };
                     d.add(Element { id: 0, kind: Kind::Text(text), a: label.min, b: label.max, rot: 0.0, stroke: Color32::BLACK, fill: Color32::TRANSPARENT, width: 1.0 });
                 }
             }
-            self.say(format!("Karta inlagd: {}", m.place.chars().take(60).collect::<String>()));
+            self.say(format!("Karta inlagd: {}", dlg.place.chars().take(60).collect::<String>()));
         } else if !open {
             self.x.map = None;
         }

@@ -69,6 +69,28 @@ fn main() {
             // Utvecklingsläge: hämta senaste utgåvans Setup-fil oavsett version och
             // kontrollera den mot kontrollsumman, utan att köra den.
             // Utvecklingsläge: hämta en karta över en adress och spara den som PNG.
+            // Utvecklingsläge: skriv ut skärmarna och fönstren som ett klick skulle kunna ta.
+            "--fonstertest" => {
+                for s in platform::capture_monitors(false) {
+                    println!("skärm {},{} {}x{} (bild {}x{})", s.x, s.y, s.w, s.h, s.image.width(), s.image.height());
+                }
+                for w in platform::window_rects() {
+                    println!("fönster {},{} {}x{}", w[0], w[1], w[2], w[3]);
+                }
+                return;
+            }
+            // Utvecklingsläge: klipp ett område på skrivbordet (x,y,b,h) och spara det som PNG.
+            "--klipptest" => {
+                let nums: Vec<i32> = args.next().unwrap_or_default().split(',').filter_map(|n| n.trim().parse().ok()).collect();
+                let out = args.next().unwrap_or_default();
+                if let [x, y, w, h] = nums[..] {
+                    let img = capture::compose(&platform::capture_monitors(false), [x, y, w, h]);
+                    println!("{}x{} · sparad: {:?}", img.width(), img.height(), img.save(&out).is_ok());
+                } else {
+                    println!("FEL: ange området som x,y,b,h");
+                }
+                return;
+            }
             "--karttest" => {
                 let (query, out) = (args.next().unwrap_or_default(), args.next().unwrap_or_default());
                 match map::fetch(&query, 16) {
@@ -94,6 +116,8 @@ fn main() {
             "--ocr" => (startup.ocr, dev) = (true, true),
             "--demo" => (startup.demo, dev) = (Some(None), true),
             "--fiberdemo" => (startup.dev, dev) = (Some(("fiber".into(), args.next().map(PathBuf::from))), true),
+            "--pdfdemo" => (startup.dev, dev) = (Some(("pdf".into(), args.next().map(PathBuf::from))), true),
+            "--flikdemo" => (startup.dev, dev) = (Some(("flik".into(), None)), true),
             "--ytademo" => (startup.dev, dev) = (Some(("yta".into(), args.next().map(PathBuf::from))), true),
             "--demo-ut" => (startup.demo, dev) = (Some(args.next().map(PathBuf::from)), true),
             other if !other.starts_with("--") => {

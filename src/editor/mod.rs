@@ -23,6 +23,20 @@ use winit::event_loop::EventLoopProxy;
 
 const CLIP_MARKER: &str = "ForceShot-objekt";
 
+/// Fliknummer delas av alla fönster, så att en flik kan byta fönster utan krock.
+static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(2);
+
+/// Reserverar `n` nummer i följd och ger det första.
+fn reserve_uids(n: u64) -> u64 {
+    NEXT_UID.fetch_add(n, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Kopierade objekt, gemensamma för alla fönster.
+fn el_clip() -> std::sync::MutexGuard<'static, Vec<Element>> {
+    static CLIP: std::sync::Mutex<Vec<Element>> = std::sync::Mutex::new(Vec::new());
+    CLIP.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 pub enum Tab {
     Doc(Box<Doc>),
     Sketch(SketchTab),
@@ -54,6 +68,17 @@ pub enum Request {
     RebindHotkeys,
     /// Kör den hämtade Setup-filen och avsluta.
     RunInstaller(PathBuf),
+    /// En flik lämnar fönstret. `at` är pekarens läge i fönstrets punkter när den släpptes.
+    MoveTab { tab: Tab, dest: Dest, at: Option<egui::Pos2> },
+}
+
+/// Vart en flik som lämnar sitt fönster ska.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Dest {
+    /// Dit den släpptes: ett annat ForceShot-fönster, annars ett nytt.
+    Drop,
+    New,
+    Main,
 }
 
 enum JobKind {
@@ -62,6 +87,8 @@ enum JobKind {
     /// Spara en förminskad kopia utan att röra dokumentet. `width_only`: gränsen gäller bredden.
     Export { path: PathBuf, max_side: u32, width_only: bool, quality: u8 },
     Mail,
+    /// En sida i en flersidig PDF. Sista sidan skriver filen.
+    PdfPage { last: bool },
 }
 
 struct Job {
@@ -91,8 +118,10 @@ pub struct Editor {
     jobs: Vec<Job>,
     clipboard: Option<arboard::Clipboard>,
     logo: Option<TextureHandle>,
-    next_uid: u64,
-    el_clip: Vec<Element>,
+    /// Ett eget fönster med utdragna flikar, inte huvudfönstret.
+    pub detached: bool,
+    /// Fliken som dras just nu.
+    tab_drag: Option<usize>,
     style_gesture: bool,
     dialog_saved: Option<u64>,
     capture_count: u32,
@@ -107,6 +136,8 @@ pub struct Editor {
     autostart: Option<bool>,
     /// Dialogrutorna för fiberskiss, förstora, komprimera och karta.
     x: tools::Extras,
+    /// Flersidig PDF som håller på att ritas: filen och sidorna som är klara.
+    pdf_out: Option<(PathBuf, Vec<(Vec<u8>, u32, u32)>)>,
 }
 
 struct UpdateUi {
@@ -226,8 +257,8 @@ impl Editor {
             jobs: Vec::new(),
             clipboard: None,
             logo: None,
-            next_uid: 1,
-            el_clip: Vec::new(),
+            detached: false,
+            tab_drag: None,
             style_gesture: false,
             dialog_saved: None,
             capture_count: 0,
@@ -238,12 +269,64 @@ impl Editor {
             update_status: String::new(),
             autostart: None,
             x: Default::default(),
+            pdf_out: None,
         }
     }
 
     fn uid(&mut self) -> u64 {
-        self.next_uid += 1;
-        self.next_uid
+        reserve_uids(1)
+    }
+
+    /// Redigeraren för ett eget fönster, med fliken som drogs ut.
+    pub fn detached_with(tab: Tab) -> Self {
+        let mut e = Self::new();
+        e.detached = true;
+        e.adopt(tab);
+        e
+    }
+
+    /// Tar emot en flik från ett annat fönster och visar den.
+    pub fn adopt(&mut self, tab: Tab) {
+        if let Some(Tab::Doc(old)) = self.tabs.get_mut(self.active) {
+            self.canvas.finish_edit(old);
+        }
+        self.canvas.crop = None;
+        self.canvas.editing = None;
+        if self.canvas.tool == Tool::Crop {
+            self.canvas.tool = Tool::Select;
+        }
+        self.tabs.push(tab);
+        self.active = self.tabs.len() - 1;
+    }
+
+    /// Lyfter ut en flik ur fönstret utan att stänga den.
+    fn release_tab(&mut self, i: usize) -> Option<Tab> {
+        if i >= self.tabs.len() {
+            return None;
+        }
+        if let Some(Tab::Doc(d)) = self.tabs.get_mut(i) {
+            self.canvas.finish_edit(d);
+        }
+        let uid = self.tabs[i].uid();
+        // Väntande sparningar hör till det här fönstret och följer inte med.
+        self.jobs.retain(|j| j.uid != uid);
+        self.canvas.forget(uid);
+        self.canvas.editing = None;
+        self.canvas.crop = None;
+        let mut tab = self.tabs.remove(i);
+        if let Tab::Sketch(s) = &mut tab {
+            s.place(None);
+        }
+        if self.active >= i && self.active > 0 {
+            self.active -= 1;
+        }
+        Some(tab)
+    }
+
+    fn send_tab(&mut self, i: usize, dest: Dest, at: Option<egui::Pos2>) {
+        if let Some(tab) = self.release_tab(i) {
+            self.requests.push(Request::MoveTab { tab, dest, at });
+        }
     }
 
     fn say(&mut self, text: impl Into<String>) {
@@ -573,7 +656,15 @@ impl Editor {
         }
         let Some(rs) = rs else { return };
         let mut job = self.jobs.remove(0);
-        let Some(i) = self.tabs.iter().position(|t| t.uid() == job.uid) else { return };
+        let Some(i) = self.tabs.iter().position(|t| t.uid() == job.uid) else {
+            if matches!(job.kind, JobKind::PdfPage { .. }) {
+                // En flik försvann medan PDF:en ritades: hellre ingen fil än en med fel sidor.
+                self.pdf_out = None;
+                self.jobs.retain(|j| !matches!(j.kind, JobKind::PdfPage { .. }));
+                self.say("PDF:en sparades inte: en flik stängdes under tiden");
+            }
+            return;
+        };
         if !job.warmed {
             if let Tab::Doc(d) = &self.tabs[i] {
                 let _ = render::shapes(ctx, &mut self.canvas, d, ctx.pixels_per_point());
@@ -631,6 +722,22 @@ impl Editor {
                     Err(e) => self.say(format!("Kunde inte spara: {e}")),
                 }
             }
+            JobKind::PdfPage { last } => {
+                let rgb = image::DynamicImage::ImageRgba8(img).to_rgb8();
+                let mut jpeg = Vec::new();
+                let encoded = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, settings.jpeg_quality.clamp(60, 100)).encode_image(&rgb);
+                if let (Some((_, pages)), Ok(())) = (&mut self.pdf_out, &encoded) {
+                    pages.push((jpeg, rgb.width(), rgb.height()));
+                }
+                if last {
+                    if let Some((path, pages)) = self.pdf_out.take() {
+                        match std::fs::write(&path, crate::imaging::pdf_pages(&pages)) {
+                            Ok(()) => self.say(format!("Sparad: {} ({} sidor)", path.display(), pages.len())),
+                            Err(e) => self.say(format!("Kunde inte spara: {e}")),
+                        }
+                    }
+                }
+            }
             JobKind::Mail => {
                 // Bilagan skrivs till en tillfällig mapp, inte till bildmappen.
                 let path = std::env::temp_dir().join("ForceShot2-dela").join(format!("{}.png", settings.filename(img.width(), img.height())));
@@ -651,7 +758,7 @@ impl Editor {
     }
 
     fn paste_elements(&mut self) {
-        let clip = self.el_clip.clone();
+        let clip = el_clip().clone();
         if clip.is_empty() {
             return;
         }
@@ -666,7 +773,7 @@ impl Editor {
             self.canvas.tool = Tool::Select;
         }
         // Nästa inklistring trappas ytterligare ett steg.
-        for e in &mut self.el_clip {
+        for e in el_clip().iter_mut() {
             e.translate(vec2(18.0, 18.0));
         }
     }
@@ -738,7 +845,7 @@ impl Editor {
                 self.queue_copy();
             } else {
                 let n = picked.len();
-                self.el_clip = picked;
+                *el_clip() = picked;
                 if let Some(c) = self.clipboard() {
                     let _ = c.set_text(CLIP_MARKER);
                 }
@@ -749,7 +856,7 @@ impl Editor {
                         d.els.retain(|e| !sel.contains(&e.id));
                     }
                     // Det som klippts ut läggs tillbaka där det låg.
-                    for e in &mut self.el_clip {
+                    for e in el_clip().iter_mut() {
                         e.translate(vec2(-18.0, -18.0));
                     }
                 }
@@ -933,6 +1040,9 @@ impl Editor {
             // Flikar.
             let mut activate = None;
             let mut close = None;
+            let (mut drag_start, mut send) = (None, None);
+            let mut tab_rects = Vec::new();
+            let detached = self.detached;
             for (i, t) in self.tabs.iter().enumerate() {
                 let mut title: String = t.title().chars().take(24).collect();
                 if t.title().chars().count() > 24 {
@@ -940,7 +1050,8 @@ impl Editor {
                 }
                 let active = i == self.active;
                 let g = ui.painter().layout_no_wrap(title, FontId::proportional(13.0), theme::TEXT);
-                let (rect, resp) = ui.allocate_exact_size(vec2(g.size().x + 52.0, 32.0), Sense::click());
+                let (rect, resp) = ui.allocate_exact_size(vec2(g.size().x + 52.0, 32.0), Sense::click_and_drag());
+                tab_rects.push(rect);
                 let bg = if active { theme::ELEVATED } else if resp.hovered() { theme::HOVER.gamma_multiply(0.6) } else { Color32::TRANSPARENT };
                 ui.painter().rect_filled(rect, 8.0, bg);
                 if active {
@@ -966,6 +1077,59 @@ impl Editor {
                 } else if resp.clicked() {
                     activate = Some(i);
                 }
+                if resp.drag_started_by(egui::PointerButton::Primary) {
+                    drag_start = Some(i);
+                    activate = Some(i);
+                }
+                resp.context_menu(|ui| {
+                    ui.set_min_width(200.0);
+                    if ui.button("Öppna i eget fönster").clicked() {
+                        send = Some((i, Dest::New));
+                        ui.close();
+                    }
+                    if detached && ui.button("Flytta till huvudfönstret").clicked() {
+                        send = Some((i, Dest::Main));
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button("Stäng fliken").clicked() {
+                        close = Some(i);
+                        ui.close();
+                    }
+                });
+            }
+            if drag_start.is_some() {
+                self.tab_drag = drag_start;
+            }
+            // En flik som dras: inom raden byter den plats, utanför raden lämnar den fönstret.
+            let mut drop_at = None;
+            if let Some(i) = self.tab_drag.filter(|i| *i < tab_rects.len()) {
+                let (p, down) = ui.input(|inp| (inp.pointer.latest_pos(), inp.pointer.any_down()));
+                let row = tab_rects[i];
+                let outside = p.is_none_or(|p| (p.y - row.center().y).abs() > 34.0 || !ui.ctx().content_rect().contains(p));
+                if !down {
+                    self.tab_drag = None;
+                    if outside {
+                        drop_at = Some(p);
+                        send = Some((i, Dest::Drop));
+                    } else if let Some(j) = p.and_then(|p| tab_rects.iter().position(|r| r.x_range().contains(p.x))).filter(|j| *j != i) {
+                        let t = self.tabs.remove(i);
+                        self.tabs.insert(j, t);
+                        self.active = j;
+                        activate = None;
+                    }
+                } else {
+                    if let (true, Some(p)) = (outside, p) {
+                        let title: String = self.tabs[i].title().chars().take(24).collect();
+                        let layer = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("flikdrag")));
+                        let g = layer.layout_no_wrap(format!("{title}  ·  släpp för eget fönster"), FontId::proportional(12.5), theme::TEXT);
+                        let chip = Rect::from_min_size(p + vec2(14.0, 14.0), g.size() + vec2(20.0, 12.0));
+                        layer.rect(chip, 8.0, theme::ELEVATED, Stroke::new(1.0, theme::ACCENT), StrokeKind::Inside);
+                        layer.galley(chip.min + vec2(10.0, 6.0), g, theme::TEXT);
+                    }
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    ui.ctx().request_repaint();
+                }
             }
             if let Some(i) = activate {
                 if let Some(Tab::Doc(d)) = self.tabs.get_mut(self.active) {
@@ -979,6 +1143,9 @@ impl Editor {
             }
             if let Some(i) = close {
                 self.close_tab(i, false);
+            }
+            if let Some((i, dest)) = send {
+                self.send_tab(i, dest, drop_at.flatten());
             }
             let plus = icons::sized_button(ui, Icon::Plus, "Nytt klipp, bild eller skiss", false, 30.0);
             egui::Popup::menu(&plus).show(|ui| self.new_menu(ui));
@@ -1266,6 +1433,7 @@ impl Editor {
                 item(ui, "Komprimera och spara …", 2);
                 item(ui, "Karta …", 3);
                 item(ui, "Dela via mejl", 4);
+                item(ui, "Spara flikar som PDF …", 6);
                 if is_sheet {
                     ui.separator();
                     item(ui, "Exportera bladen till skrivbordet …", 5);
@@ -1300,6 +1468,7 @@ impl Editor {
             Some(3) => self.open_map(),
             Some(4) => self.share_by_mail(),
             Some(5) => self.open_sheet_export(),
+            Some(6) => self.open_pdf_dialog(),
             _ => {}
         }
     }

@@ -61,36 +61,106 @@ fn geocode(agent: &ureq::Agent, query: &str) -> Result<(f64, f64, String), Strin
     Ok((lat, lon, name))
 }
 
+/// Kartans utsnitt: mittpunkten i världens bildpunkter på zoomnivån.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct View {
+    pub x: f64,
+    pub y: f64,
+    pub zoom: u32,
+}
+
+pub const MIN_ZOOM: u32 = 3;
+pub const MAX_ZOOM: u32 = 19;
+
+impl View {
+    pub fn at(lat: f64, lon: f64, zoom: u32) -> Self {
+        let (x, y) = tile_xy(lat, lon, zoom);
+        Self { x: x * TILE as f64, y: y * TILE as f64, zoom }
+    }
+
+    /// Flyttar utsnittet så många bildpunkter. I höjdled tar världen slut.
+    pub fn moved(self, dx: f64, dy: f64) -> Self {
+        let world = (TILE as f64) * 2f64.powi(self.zoom as i32);
+        Self { x: (self.x + dx).rem_euclid(world), y: (self.y + dy).clamp(0.0, world), zoom: self.zoom }
+    }
+
+    /// Samma mittpunkt på en annan zoomnivå.
+    pub fn with_zoom(self, zoom: u32) -> Self {
+        let zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+        let k = 2f64.powi(zoom as i32 - self.zoom as i32);
+        Self { x: self.x * k, y: self.y * k, zoom }
+    }
+}
+
+/// Hämtar kartrutor och minns dem, så att en ruta bara hämtas en gång medan man
+/// flyttar runt utsnittet.
+pub struct Tiles {
+    agent: ureq::Agent,
+    cache: std::collections::HashMap<(u32, i64, i64), RgbaImage>,
+}
+
+impl Default for Tiles {
+    fn default() -> Self {
+        Self { agent: agent(), cache: Default::default() }
+    }
+}
+
+impl Tiles {
+    /// Slår upp en adress: latitud, longitud och platsens namn.
+    pub fn locate(&self, query: &str) -> Result<(f64, f64, String), String> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Err("Skriv en adress först.".into());
+        }
+        geocode(&self.agent, query)
+    }
+
+    fn tile(&mut self, zoom: u32, tx: i64, ty: i64) -> Result<&RgbaImage, String> {
+        use std::collections::hash_map::Entry;
+        if self.cache.len() > 400 {
+            self.cache.clear();
+        }
+        match self.cache.entry((zoom, tx, ty)) {
+            Entry::Occupied(e) => Ok(e.into_mut()),
+            Entry::Vacant(e) => {
+                let url = format!("https://tile.openstreetmap.org/{zoom}/{tx}/{ty}.png");
+                let resp = self.agent.get(&url).call().map_err(|e| format!("Kunde inte hämta kartan: {e}"))?;
+                let mut bytes = Vec::new();
+                std::io::Read::read_to_end(&mut resp.into_body().into_with_config().limit(4 * 1024 * 1024).reader(), &mut bytes).map_err(|e| e.to_string())?;
+                let tile = image::load_from_memory(&bytes).map_err(|e| format!("Kartrutan gick inte att läsa: {e}"))?.to_rgba8();
+                Ok(e.insert(tile))
+            }
+        }
+    }
+
+    /// Sätter ihop kartbilden för ett utsnitt.
+    pub fn render(&mut self, view: View) -> Result<RgbaImage, String> {
+        let zoom = view.zoom;
+        // Bildens övre vänstra hörn i världens bildpunkter.
+        let left = (view.x - WIDTH as f64 / 2.0).floor() as i64;
+        let top = (view.y - HEIGHT as f64 / 2.0).floor() as i64;
+        let max = 1i64 << zoom;
+        let mut image = RgbaImage::from_pixel(WIDTH, HEIGHT, image::Rgba([0xE8, 0xE8, 0xE8, 255]));
+        let (tx0, ty0) = (left.div_euclid(TILE as i64), top.div_euclid(TILE as i64));
+        let (tx1, ty1) = ((left + WIDTH as i64 - 1).div_euclid(TILE as i64), (top + HEIGHT as i64 - 1).div_euclid(TILE as i64));
+        for ty in ty0..=ty1 {
+            if ty < 0 || ty >= max {
+                continue;
+            }
+            for tx in tx0..=tx1 {
+                let tile = self.tile(zoom, tx.rem_euclid(max), ty)?.clone();
+                image::imageops::replace(&mut image, &tile, tx * TILE as i64 - left, ty * TILE as i64 - top);
+            }
+        }
+        Ok(image)
+    }
+}
+
 /// Slår upp adressen och sätter ihop en kartbild med platsen i mitten.
 pub fn fetch(query: &str, zoom: u32) -> Result<MapResult, String> {
-    let query = query.trim();
-    if query.is_empty() {
-        return Err("Skriv en adress först.".into());
-    }
-    let agent = agent();
-    let (lat, lon, place) = geocode(&agent, query)?;
-    let (cx, cy) = tile_xy(lat, lon, zoom);
-    // Bildens övre vänstra hörn i världens bildpunkter.
-    let left = (cx * TILE as f64 - WIDTH as f64 / 2.0).floor() as i64;
-    let top = (cy * TILE as f64 - HEIGHT as f64 / 2.0).floor() as i64;
-    let max = 1i64 << zoom;
-    let mut image = RgbaImage::from_pixel(WIDTH, HEIGHT, image::Rgba([0xE8, 0xE8, 0xE8, 255]));
-    let (tx0, ty0) = (left.div_euclid(TILE as i64), top.div_euclid(TILE as i64));
-    let (tx1, ty1) = ((left + WIDTH as i64 - 1).div_euclid(TILE as i64), (top + HEIGHT as i64 - 1).div_euclid(TILE as i64));
-    for ty in ty0..=ty1 {
-        if ty < 0 || ty >= max {
-            continue;
-        }
-        for tx in tx0..=tx1 {
-            let url = format!("https://tile.openstreetmap.org/{zoom}/{}/{ty}.png", tx.rem_euclid(max));
-            let resp = agent.get(&url).call().map_err(|e| format!("Kunde inte hämta kartan: {e}"))?;
-            let mut bytes = Vec::new();
-            std::io::Read::read_to_end(&mut resp.into_body().into_with_config().limit(4 * 1024 * 1024).reader(), &mut bytes).map_err(|e| e.to_string())?;
-            let tile = image::load_from_memory(&bytes).map_err(|e| format!("Kartrutan gick inte att läsa: {e}"))?.to_rgba8();
-            image::imageops::replace(&mut image, &tile, tx * TILE as i64 - left, ty * TILE as i64 - top);
-        }
-    }
-    Ok(MapResult { image, place })
+    let mut tiles = Tiles::default();
+    let (lat, lon, place) = tiles.locate(query)?;
+    Ok(MapResult { image: tiles.render(View::at(lat, lon, zoom))?, place })
 }
 
 #[cfg(test)]
@@ -110,5 +180,25 @@ mod tests {
         // Malmö (55,605 N, 13,003 O) på nivå 12 ligger i ruta 2195/1283.
         let (x, y) = tile_xy(55.605, 13.003, 12);
         assert_eq!((x.floor() as i64, y.floor() as i64), (2195, 1283));
+    }
+
+    #[test]
+    fn view_keeps_its_centre_across_zoom_levels() {
+        let v = View::at(55.605, 13.003, 16);
+        let back = v.with_zoom(12).with_zoom(16);
+        assert!((back.x - v.x).abs() < 1e-6 && (back.y - v.y).abs() < 1e-6);
+        // Ruta 2195/1283 på nivå 12, alltså bildpunkt 2195·256 … 2196·256.
+        let wide = v.with_zoom(12);
+        assert_eq!(((wide.x / 256.0).floor() as i64, (wide.y / 256.0).floor() as i64), (2195, 1283));
+        assert_eq!(v.with_zoom(40).zoom, MAX_ZOOM);
+    }
+
+    #[test]
+    fn panning_wraps_sideways_but_not_upwards() {
+        let v = View { x: 10.0, y: 10.0, zoom: 3 };
+        let world = 256.0 * 8.0;
+        let m = v.moved(-30.0, -30.0);
+        assert!((m.x - (world - 20.0)).abs() < 1e-9);
+        assert_eq!(m.y, 0.0);
     }
 }

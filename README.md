@@ -48,9 +48,9 @@ version med en Setup-fil bifogad visas en ruta med *Ladda ner och uppdatera*,
 
 Så här lägger du upp en ny version:
 
-1. `.\build.ps1 -Version 2.1.0`
-2. Skapa en release i repot med taggen `v2.1.0`.
-3. Bifoga `dist\TRK ForceShot Setup 2.1.0.exe`.
+1. `.\build.ps1 -Version 2.2.0`
+2. Skapa en release i repot med taggen `v2.2.0`.
+3. Bifoga `dist\TRK ForceShot Setup 2.2.0.exe`.
 4. Beskrivningen är det användaren ser som "vad som är nytt".
 
 Version 1 har sitt eget repo för utgåvor (`YamYam-ee/forceshot`), så de två
@@ -84,6 +84,10 @@ mellanfilerna utanför den: skapa `.cargo\config.toml` med `[build]` och
 | `TRK-ForceShot --ocr bild.png` | Öppnar bilden och läser av texten direkt |
 | `TRK-ForceShot --fiberdemo [mapp]` | Två fiberblad av påhittade foton, exporteras till mappen |
 | `TRK-ForceShot --ytademo [fil.png]` | En arbetsyta med innehåll i och utanför guiden |
+| `TRK-ForceShot --pdfdemo fil.pdf` | Två fiberblad sparade som en tvåsidig PDF |
+| `TRK-ForceShot --flikdemo` | Två fiberblad, det andra utdraget till ett eget fönster |
+| `TRK-ForceShot --fonstertest` | Skriver ut skärmarna och fönstren som ett klick kan ta |
+| `TRK-ForceShot --klipptest x,y,b,h fil.png` | Klipper ett område på skrivbordet, även över skärmgränser |
 | `TRK-ForceShot --demo` | Provbild med varje objekttyp (`--demo-ut fil.png` exporterar den) |
 
 ## Snabbtangenter
@@ -102,9 +106,11 @@ filmmarkering.
 ## Funktioner
 
 **Skärmklipp:** område, hel skärm, aktivt fönster och samma område igen, med
-förstoringsglas och åtgärdsrad.
+förstoringsglas och åtgärdsrad. En markering får gå över flera skärmar, och ett
+klick tar fönstret under pekaren (det lyfts fram när pekaren är över det).
+*Ctrl+A* markerar skärmen, en gång till alla skärmar.
 
-**Redigeraren:** flikar, text (vänster, centrerad, höger), rektangel, ellips,
+**Redigeraren:** flikar som kan byta plats och dras ut till egna fönster, text (vänster, centrerad, höger), rektangel, ellips,
 linje, pil, frihand, överstrykning, oskärpa, mosaik, radera element, beskär,
 rotera, spegelvänd, vridning av objekt, ångra/gör om, kopiera och klistra in
 objekt och bilder.
@@ -122,17 +128,23 @@ gemensam skala, Bottenskiss och Tankskiss.
   `<provningsnummer>-skiss-1`, `-2` … i valt format, kvalitet och bredd.
 - **Arbetsyta / ForceSpace** (plusknappen → *Ny arbetsyta*): en vit yta där allt
   får ligga var som helst. Den streckade guiden (565 × 744) är det som blir bild.
+  Guiden flyttas genom att dra i dess etikett; storleken är fast.
 - **Förstora** (*Mer → Förstora*): 2×, 3× eller 4× med bildtyperna skärmklipp,
   inskannat dokument och foto. Annoteringarna följer med.
 - **Komprimera** (*Mer → Komprimera och spara*): mindre JPEG med vald största
   sida och kvalitet.
-- **Karta** (*Mer → Karta*): kartbild över en adress från OpenStreetMap, inlagd
-  som ett objekt med upphovstext.
+- **Karta** (*Mer → Karta*): sök en adress, dra i kartan för att flytta utsnittet
+  och rulla för att zooma. Det som syns läggs in som ett objekt med upphovstext.
+  Kartan kommer från OpenStreetMap.
 - **Dela via mejl** (*Mer → Dela via mejl*): öppnar ett nytt mejl med bilden
   bifogad. Ingenting skickas av appen.
 - **Textavläsning (OCR):** läser svenska med Windows inbyggda textigenkänning.
 - **PDF:** öppnas med en flik per sida (150 dpi, högst 40 sidor). En bild kan
-  sparas som ensidig PDF.
+  sparas som ensidig PDF, och *Mer → Spara flikar som PDF* gör en sida av varje
+  ikryssad flik, med annoteringarna inbrända.
+- **Flikar i egna fönster:** dra en flik ut ur flikraden och släpp den, eller
+  högerklicka på fliken → *Öppna i eget fönster*. Släpps den på ett annat
+  ForceShot-fönster hamnar den där. Inom raden byter flikarna plats.
 - **Filformat:** öppnar PNG, JPEG, BMP, TIFF, GIF, WebP och PDF; sparar PNG,
   JPEG, BMP, TIFF, GIF och PDF.
 - **Högerklick i Utforskaren:** *Redigera med TRK ForceShot* på bilder och
@@ -140,16 +152,12 @@ gemensam skala, Bottenskiss och Tankskiss.
 
 ### Skillnader mot version 1
 
-- Flikar kan inte dras ut till egna fönster.
-- En markering kan inte gå över flera skärmar, och ett klick tar inte fönstret
-  under pekaren.
-- Arbetsytans guide har fast storlek och kan inte flyttas.
 - Förstora och komprimera saknar förhandsvisning före/efter.
-- Kartan kan inte panoreras eller zoomas i dialogrutan; välj utsnitt och lägg in.
+- Arbetsytans guide kan flyttas men inte ändra storlek.
 - Radera element finns bara som ruta, inte som pensel.
 - OCR kan inte byta ut en rad i bilden.
-- Flera sidor kan inte sparas tillbaka som en PDF.
 - Snabbtangenter ändras genom att skriva kombinationen som text.
+- En PDF som sparas består av bilder; texten i den går inte att markera.
 
 ## Läget på macOS
 
