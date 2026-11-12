@@ -967,6 +967,13 @@ impl Editor {
 
         self.dialogs(&ctx, settings);
         self.draw_toast(&ctx);
+        // Utvecklingsläge: flytta skissfliken till ett eget fönster när skissen har laddats.
+        if !self.detached && std::env::var_os("FORCESHOT_SKISSFLYTT").is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(300));
+            if matches!(self.tabs.get(self.active), Some(Tab::Sketch(s)) if s.age().is_some_and(|a| a.as_secs() >= 3)) {
+                self.send_tab(self.active, Dest::New, None);
+            }
+        }
     }
 
     fn logo(&mut self, ctx: &egui::Context) -> egui::TextureId {

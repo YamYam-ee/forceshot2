@@ -155,6 +155,11 @@ impl SketchTab {
         }
     }
 
+    /// Hur länge webbvyn har funnits.
+    pub fn age(&self) -> Option<std::time::Duration> {
+        self.created.map(|t| t.elapsed())
+    }
+
     /// Flyttar webbvyn till ett annat fönster när fliken har bytt fönster.
     fn rehost(&mut self, window: &winit::window::Window) {
         use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
