@@ -42,7 +42,13 @@ pub const TEXT_PAD: f32 = 6.0;
 
 pub fn text_galley(ctx: &egui::Context, el: &Element, td: &TextData, s: f32) -> Arc<egui::Galley> {
     let wrap = ((el.rect().width() - 2.0 * TEXT_PAD) * s).max(8.0);
-    ctx.fonts_mut(|f| f.layout(td.text.clone(), FontId::new(td.size * s, theme::bold()), el.stroke, wrap))
+    let mut job = egui::text::LayoutJob::simple(td.text.clone(), FontId::new(td.size * s, theme::bold()), el.stroke, wrap);
+    job.halign = match td.align {
+        1 => egui::Align::Center,
+        2 => egui::Align::Max,
+        _ => egui::Align::Min,
+    };
+    ctx.fonts_mut(|f| f.layout_job(job))
 }
 
 /// Textrutans höjd i bildpunkter, så som texten radbryts just nu.
@@ -116,6 +122,11 @@ pub fn element(el: &Element, xf: &Xf, res: &Res, out: &mut Vec<Shape>) {
             }
         }
         Kind::Text(td) => text(el, td, xf, res, out),
+        Kind::SheetFrame(bars) => {
+            for b in bars {
+                out.push(Shape::rect_filled(xf.r(*b), 0.0, Color32::WHITE));
+            }
+        }
         Kind::Weld(w) => weld(el, w, xf, res, out),
         Kind::Film(f) => film(el, f, xf, res, out),
     }
@@ -155,7 +166,14 @@ fn text(el: &Element, td: &TextData, xf: &Xf, res: &Res, out: &mut Vec<Shape>) {
         return;
     }
     let g = text_galley(res.ctx, el, td, s);
-    let origin = xf.p(el.to_world(el.rect().min + vec2(TEXT_PAD, TEXT_PAD)));
+    // En centrerad eller högerställd text placeras efter sin mitt respektive högerkant.
+    let r = el.rect();
+    let x = match td.align {
+        1 => r.center().x,
+        2 => r.max.x - TEXT_PAD,
+        _ => r.min.x + TEXT_PAD,
+    };
+    let origin = xf.p(el.to_world(pos2(x, r.min.y + TEXT_PAD)));
     if td.box_fill.is_none() && td.box_border.is_none() {
         // Utan ruta: en mörk eller ljus kontrastkant runt bokstäverna.
         let lum = el.stroke.r() as u32 * 3 + el.stroke.g() as u32 * 6 + el.stroke.b() as u32;

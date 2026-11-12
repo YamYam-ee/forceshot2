@@ -104,6 +104,8 @@ pub struct ToolStyle {
     pub film_format: usize,
     pub film_landscape: bool,
     pub px_per_cm: f32,
+    /// Textjustering: 0 vänster, 1 centrerat, 2 höger.
+    pub text_align: u8,
 }
 
 impl Default for ToolStyle {
@@ -129,6 +131,7 @@ impl Default for ToolStyle {
             film_format: 3,
             film_landscape: false,
             px_per_cm: 0.0,
+            text_align: 0,
         }
     }
 }
@@ -154,6 +157,10 @@ pub struct Settings {
     pub check_updates: bool,
     /// En version användaren valt att hoppa över.
     pub skipped_update: String,
+    /// Bladexporten för fiberskisser.
+    pub sheet_jpeg: bool,
+    pub sheet_quality: u8,
+    pub sheet_max_width: u32,
 }
 
 impl Default for Settings {
@@ -176,6 +183,9 @@ impl Default for Settings {
             update_repo: DEFAULT_UPDATE_REPO.into(),
             check_updates: true,
             skipped_update: String::new(),
+            sheet_jpeg: true,
+            sheet_quality: 82,
+            sheet_max_width: 1200,
         }
     }
 }

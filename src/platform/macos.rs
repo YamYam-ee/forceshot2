@@ -31,6 +31,11 @@ pub fn ocr(_img: &image::RgbaImage) -> Result<Vec<String>, String> {
     Err("Textavläsning finns inte i Mac-versionen än.".into())
 }
 
+/// Öppnar ett nytt mejl i Mail med filen bifogad.
+pub fn send_mail(path: &std::path::Path) -> Result<(), String> {
+    std::process::Command::new("open").args(["-a", "Mail"]).arg(path).status().map(|_| ()).map_err(|e| e.to_string())
+}
+
 pub fn cursor_pos() -> (i32, i32) {
     // Utan pekarläge väljs första skärmen; räcker för "hela skärmen" på en bärbar.
     (0, 0)

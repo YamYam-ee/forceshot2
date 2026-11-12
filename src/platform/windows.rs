@@ -167,6 +167,41 @@ pub fn ocr(img: &RgbaImage) -> Result<Vec<String>, String> {
     run().map_err(|e| format!("Textavläsningen misslyckades: {}", e.message()))
 }
 
+/// Öppnar ett nytt mejl i datorns e-postprogram med filen bifogad (Simple MAPI).
+/// Ingenting skickas härifrån. Anropet väntar tills mejlfönstret stängts, så det ska
+/// köras i en bakgrundstråd.
+pub fn send_mail(path: &std::path::Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::FreeLibrary;
+    use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+    use windows_sys::Win32::System::Mapi::{MAPI_DIALOG, MAPI_LOGON_UI, MapiFileDescW, MapiMessageW};
+    let wide = |s: &std::ffi::OsStr| -> Vec<u16> { s.encode_wide().chain(std::iter::once(0)).collect() };
+    unsafe {
+        let lib = LoadLibraryW(wide(std::ffi::OsStr::new("mapi32.dll")).as_ptr());
+        if lib.is_null() {
+            return Err("Hittade inget e-postprogram.".into());
+        }
+        let Some(entry) = GetProcAddress(lib, c"MAPISendMailW".as_ptr() as *const u8) else {
+            FreeLibrary(lib);
+            return Err("E-postprogrammet stöder inte bilagor på det här sättet.".into());
+        };
+        let send: unsafe extern "system" fn(usize, usize, *const MapiMessageW, u32, u32) -> u32 = std::mem::transmute(entry);
+        let mut full = wide(path.as_os_str());
+        let mut name = wide(path.file_name().unwrap_or_default());
+        let mut file: MapiFileDescW = std::mem::zeroed();
+        file.nPosition = u32::MAX;
+        file.lpszPathName = full.as_mut_ptr();
+        file.lpszFileName = name.as_mut_ptr();
+        let mut msg: MapiMessageW = std::mem::zeroed();
+        msg.nFileCount = 1;
+        msg.lpFiles = &mut file;
+        let code = send(0, 0, &msg, MAPI_DIALOG | MAPI_LOGON_UI, 0);
+        FreeLibrary(lib);
+        // 0 = klart, 1 = användaren stängde fönstret utan att skicka.
+        if code <= 1 { Ok(()) } else { Err(format!("E-postprogrammet svarade med felkod {code}.")) }
+    }
+}
+
 /// Det aktiva fönstrets synliga ram (utan den osynliga skuggkanten), i skrivbordets enheter.
 pub fn active_window_rect() -> Option<(i32, i32, i32, i32)> {
     unsafe {

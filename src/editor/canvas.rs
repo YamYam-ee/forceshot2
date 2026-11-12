@@ -218,6 +218,7 @@ impl Canvas {
                     size: st.text_size,
                     box_fill: st.text_box_fill.then(|| col(st.box_fill)),
                     box_border: st.text_box_border.then(|| col(st.box_border)),
+                    align: st.text_align,
                 })
             }
             Tool::Weld => {
@@ -412,6 +413,7 @@ impl Canvas {
             Drag::Create { id, .. } => {
                 let mut remove = false;
                 let mut edit = false;
+                let mut ask = false;
                 if let Some(el) = doc.get_mut(id) {
                     match &mut el.kind {
                         Kind::Line | Kind::Arrow { .. } => remove = el.a.distance(el.b) < 3.0,
@@ -420,6 +422,7 @@ impl Canvas {
                             if el.a.distance(el.b) < 8.0 {
                                 el.b = el.a + vec2(0.0, -46.0 * w.scale);
                             }
+                            ask = true;
                         }
                         Kind::Text(_) => {
                             let r = el.rect();
@@ -441,6 +444,8 @@ impl Canvas {
                 } else if edit {
                     self.editing = Some(id);
                     self.focus_edit = true;
+                } else if ask && !doc.auto_number {
+                    self.edit_dialog = Some(id);
                 }
             }
             Drag::Handle { id, orig, .. } => {
@@ -502,6 +507,10 @@ impl Canvas {
                     }
                     let id = doc.add(el);
                     doc.sel = vec![id];
+                    // Skarvnumret frågas när skarven sätts ut, tills löpnumrering valts för bilden.
+                    if tool == Tool::Weld && !doc.auto_number {
+                        self.edit_dialog = Some(id);
+                    }
                 }
             },
             _ => match same {
@@ -558,7 +567,7 @@ impl Canvas {
         if all {
             self.tool = Tool::Select;
             self.crop = None;
-            doc.sel = doc.els.iter().map(|e| e.id).collect();
+            doc.sel = doc.els.iter().filter(|e| !matches!(e.kind, Kind::SheetFrame(_))).map(|e| e.id).collect();
         }
         if (turn != 0.0 || straighten) && !doc.sel.is_empty() {
             doc.checkpoint();
@@ -670,8 +679,13 @@ impl Canvas {
         // ----- Ritning -----
         self.sync_textures(&ctx, doc);
         let img_rect = xf.r(doc.image_rect());
-        painter.rect_filled(img_rect.translate(vec2(0.0, 5.0)).expand(5.0), 4.0, Color32::from_black_alpha(46));
-        painter.rect_filled(img_rect.expand(1.0), 0.0, Color32::from_black_alpha(90));
+        if doc.space {
+            // Arbetsytan är vit så långt man ser.
+            painter.rect_filled(rect, 0.0, Color32::WHITE);
+        } else {
+            painter.rect_filled(img_rect.translate(vec2(0.0, 5.0)).expand(5.0), 4.0, Color32::from_black_alpha(46));
+            painter.rect_filled(img_rect.expand(1.0), 0.0, Color32::from_black_alpha(90));
+        }
         if let Some(t) = self.base_texture(doc.uid) {
             painter.image(t, img_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
@@ -681,7 +695,16 @@ impl Canvas {
         for el in &doc.els {
             draw::element(el, &xf, &res, &mut shapes);
         }
-        painter.with_clip_rect(img_rect.intersect(rect)).extend(shapes);
+        // I en arbetsyta får innehållet ligga utanför guiden; annars klipps det vid bildkanten.
+        let clip = if doc.space { rect } else { img_rect.intersect(rect) };
+        painter.with_clip_rect(clip).extend(shapes);
+        if doc.space {
+            let g = img_rect;
+            let pts = [g.left_top(), g.right_top(), g.right_bottom(), g.left_bottom(), g.left_top()];
+            painter.extend(Shape::dashed_line(&pts, Stroke::new(1.5, theme::ACCENT_DEEP), 8.0, 6.0));
+            let label = painter.layout_no_wrap("Guide – det här blir bilden".into(), FontId::proportional(11.5), theme::ACCENT_DEEP);
+            painter.galley(g.left_top() - vec2(0.0, label.size().y + 4.0), label, theme::ACCENT_DEEP);
+        }
 
         // Markering och handtag.
         let single = doc.sel.len() == 1;
@@ -775,6 +798,11 @@ impl Canvas {
                         .frame(egui::Frame::NONE)
                         .margin(0.0)
                         .desired_rows(1)
+                        .horizontal_align(match td.align {
+                            1 => egui::Align::Center,
+                            2 => egui::Align::Max,
+                            _ => egui::Align::Min,
+                        })
                         .desired_width(r.width());
                     let out = ui.put(Rect::from_min_size(r.min, vec2(r.width(), r.height().max(td.size * xf.s))), edit);
                     if self.focus_edit {

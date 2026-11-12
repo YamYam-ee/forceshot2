@@ -196,6 +196,32 @@ mod imp {
         key.set_value("EstimatedSize", &size_kb).map_err(|e| e.to_string())
     }
 
+    const MENU_TYPES: [&str; 9] = [".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".gif", ".webp", ".pdf"];
+    const MENU_KEY: &str = "TRKForceShot2";
+
+    /// Lägger "Redigera med TRK ForceShot" i Utforskarens högerklicksmeny för bilder och
+    /// PDF:er. I Windows 11 hamnar kommandot under "Visa fler alternativ".
+    fn write_context_menu(exe: &Path) {
+        let root = RegKey::predef(HKEY_CURRENT_USER);
+        for ext in MENU_TYPES {
+            let base = format!(r"Software\Classes\SystemFileAssociations\{ext}\shell\{MENU_KEY}");
+            if let Ok((key, _)) = root.create_subkey(&base) {
+                let _ = key.set_value("", &"Redigera med TRK ForceShot".to_string());
+                let _ = key.set_value("Icon", &format!("{},0", exe.display()));
+            }
+            if let Ok((cmd, _)) = root.create_subkey(format!(r"{base}\command")) {
+                let _ = cmd.set_value("", &format!("\"{}\" \"%1\"", exe.display()));
+            }
+        }
+    }
+
+    fn remove_context_menu() {
+        let root = RegKey::predef(HKEY_CURRENT_USER);
+        for ext in MENU_TYPES {
+            let _ = root.delete_subkey_all(format!(r"Software\Classes\SystemFileAssociations\{ext}\shell\{MENU_KEY}"));
+        }
+    }
+
     /// Installerar eller uppdaterar: kopierar den här filen till installationsmappen och
     /// skriver genväg, avinstallationspost och autostart.
     pub fn install(opts: Options) -> Result<(), String> {
@@ -224,6 +250,7 @@ mod imp {
             }
         }
         write_uninstall_entry(&target)?;
+        write_context_menu(&target);
         set_autostart(opts.autostart, &target)?;
         if opts.disable_v1_autostart {
             disable_v1_autostart();
@@ -246,6 +273,7 @@ mod imp {
         let _ = set_autostart(false, &target);
         let _ = RegKey::predef(HKEY_CURRENT_USER).delete_subkey_all(UNINSTALL_KEY);
         let _ = std::fs::remove_file(shortcut());
+        remove_context_menu();
         let dir = install_dir();
         if dir.exists() {
             // En körande programfil kan inte ta bort sig själv; cmd gör det strax efter att vi avslutat.

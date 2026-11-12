@@ -5,6 +5,7 @@ pub mod canvas;
 pub mod doc;
 pub mod draw;
 pub mod render;
+pub mod tools;
 
 use crate::app::UserEvent;
 use crate::icons::{self, Icon};
@@ -58,6 +59,9 @@ pub enum Request {
 enum JobKind {
     Copy,
     Save(PathBuf),
+    /// Spara en förminskad kopia utan att röra dokumentet. `width_only`: gränsen gäller bredden.
+    Export { path: PathBuf, max_side: u32, width_only: bool, quality: u8 },
+    Mail,
 }
 
 struct Job {
@@ -101,6 +105,8 @@ pub struct Editor {
     update_status: String,
     /// Autostartens läge, läst ur registret första gången inställningarna visas.
     autostart: Option<bool>,
+    /// Dialogrutorna för fiberskiss, förstora, komprimera och karta.
+    x: tools::Extras,
 }
 
 struct UpdateUi {
@@ -195,8 +201,15 @@ fn write_image(img: &RgbaImage, path: &Path, quality: u8) -> Result<(), String> 
         let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
         let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(std::io::BufWriter::new(file), quality.clamp(30, 100));
         enc.encode_image(&rgb).map_err(|e| e.to_string())
-    } else {
+    } else if ext == "pdf" {
+        let rgb = image::DynamicImage::ImageRgba8(img.clone()).to_rgb8();
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, quality.clamp(60, 100)).encode_image(&rgb).map_err(|e| e.to_string())?;
+        std::fs::write(path, crate::imaging::pdf_page(&jpeg, img.width(), img.height())).map_err(|e| e.to_string())
+    } else if ext == "gif" || ext == "tif" || ext == "tiff" || ext == "bmp" || ext == "png" {
         img.save(path).map_err(|e| e.to_string())
+    } else {
+        img.save_with_format(path, image::ImageFormat::Png).map_err(|e| e.to_string())
     }
 }
 
@@ -224,6 +237,7 @@ impl Editor {
             update_check: None,
             update_status: String::new(),
             autostart: None,
+            x: Default::default(),
         }
     }
 
@@ -301,8 +315,8 @@ impl Editor {
 
     pub fn open_dialog(&mut self, ctx: &egui::Context) {
         let picked = rfd::FileDialog::new()
-            .add_filter("Bilder och PDF", &["png", "jpg", "jpeg", "bmp", "pdf"])
-            .add_filter("Bilder", &["png", "jpg", "jpeg", "bmp"])
+            .add_filter("Bilder och PDF", &["png", "jpg", "jpeg", "bmp", "tif", "tiff", "gif", "webp", "pdf"])
+            .add_filter("Bilder", &["png", "jpg", "jpeg", "bmp", "tif", "tiff", "gif", "webp"])
             .add_filter("PDF", &["pdf"])
             .pick_files();
         for p in picked.unwrap_or_default() {
@@ -418,7 +432,7 @@ impl Editor {
         let wave: Vec<egui::Pos2> = (0..60).map(|i| pos2(560.0 + i as f32 * 4.0, 540.0 + (i as f32 * 0.35).sin() * 18.0)).collect();
         add(Kind::Free(wave), pos2(560.0, 520.0), pos2(800.0, 560.0), &|e| e.stroke = Color32::from_rgb(0x8E, 0x24, 0xAA));
         let text = |t: &str, fill: bool| {
-            Kind::Text(TextData { text: t.into(), size: 20.0, box_fill: fill.then(|| Color32::from_rgba_unmultiplied(255, 255, 255, 242)), box_border: fill.then(|| Color32::from_rgb(0x00, 0xAC, 0xC1)) })
+            Kind::Text(TextData { text: t.into(), size: 20.0, box_fill: fill.then(|| Color32::from_rgba_unmultiplied(255, 255, 255, 242)), box_border: fill.then(|| Color32::from_rgb(0x00, 0xAC, 0xC1)), align: 0 })
         };
         add(text("Mantelring 2 – omprovas efter reparation, åäö ÅÄÖ", true), pos2(60.0, 40.0), pos2(360.0, 70.0), &|e| { e.stroke = Color32::BLACK; e.width = 2.0 });
         add(text("Utan ruta", false), pos2(420.0, 40.0), pos2(620.0, 70.0), &|e| e.stroke = Color32::WHITE);
@@ -530,6 +544,9 @@ impl Editor {
                 .add_filter("PNG", &["png"])
                 .add_filter("JPEG", &["jpg", "jpeg"])
                 .add_filter("BMP", &["bmp"])
+                .add_filter("TIFF", &["tif", "tiff"])
+                .add_filter("GIF", &["gif"])
+                .add_filter("PDF", &["pdf"])
                 .save_file()
         } else {
             Some(folder.join(name))
@@ -596,6 +613,39 @@ impl Editor {
                 }
                 Err(e) => self.say(format!("Kunde inte spara: {e}")),
             },
+            JobKind::Export { path, max_side, width_only, quality } => {
+                let longest = if width_only { img.width() } else { img.width().max(img.height()) };
+                let out = if longest > max_side {
+                    let k = max_side as f32 / longest as f32;
+                    let (w, h) = ((img.width() as f32 * k).round().max(1.0) as u32, (img.height() as f32 * k).round().max(1.0) as u32);
+                    image::imageops::resize(&img, w, h, image::imageops::FilterType::Lanczos3)
+                } else {
+                    img
+                };
+                match write_image(&out, &path, quality) {
+                    Ok(()) => {
+                        let kb = std::fs::metadata(&path).map(|m| m.len() / 1024).unwrap_or(0);
+                        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                        self.say(format!("Sparad: {name} ({} × {} px, {kb} kB)", out.width(), out.height()));
+                    }
+                    Err(e) => self.say(format!("Kunde inte spara: {e}")),
+                }
+            }
+            JobKind::Mail => {
+                // Bilagan skrivs till en tillfällig mapp, inte till bildmappen.
+                let path = std::env::temp_dir().join("ForceShot2-dela").join(format!("{}.png", settings.filename(img.width(), img.height())));
+                match write_image(&img, &path, settings.jpeg_quality) {
+                    Ok(()) => {
+                        std::thread::spawn(move || {
+                            if let Err(e) = crate::platform::send_mail(&path) {
+                                log::error!("{e}");
+                            }
+                        });
+                        self.say("Öppnar ett nytt mejl med bilden bifogad …");
+                    }
+                    Err(e) => self.say(format!("Kunde inte skapa bilagan: {e}")),
+                }
+            }
         }
         ctx.request_repaint();
     }
@@ -778,7 +828,7 @@ impl Editor {
             egui::Panel::left("verktyg").exact_size(48.0).resizable(false).show_separator_line(false).frame(rail).show(ui, |ui| self.tool_rail(ui));
         }
 
-        let overlay_open = self.show_settings || self.confirm.is_some() || self.ocr.is_some() || self.update.is_some() || ctx.any_popup_open();
+        let overlay_open = self.show_settings || self.confirm.is_some() || self.ocr.is_some() || self.update.is_some() || self.x.any_open() || ctx.any_popup_open();
         let active = self.active;
         for (i, t) in self.tabs.iter_mut().enumerate() {
             if let Tab::Sketch(s) = t {
@@ -850,6 +900,15 @@ impl Editor {
                 ui.close();
                 self.open_sketch(&s.id);
             }
+        }
+        ui.separator();
+        if item(ui, "Fiberskiss …", "4 foton per blad") {
+            ui.close();
+            self.open_sheet_dialog();
+        }
+        if item(ui, "Ny arbetsyta", "ForceSpace") {
+            ui.close();
+            self.new_space();
         }
     }
 
@@ -1011,7 +1070,7 @@ impl Editor {
                 Kind::Rect | Kind::Ellipse => Tool::Rect,
                 Kind::Arrow { .. } => Tool::Arrow,
                 Kind::Line | Kind::Free(_) => Tool::Line,
-                Kind::Image(_) => Tool::Select,
+                Kind::Image(_) | Kind::SheetFrame(_) => Tool::Select,
             },
             (t, _) => t,
         };
@@ -1048,6 +1107,14 @@ impl Editor {
             Tool::Text => {
                 dim(ui, "Storlek");
                 changed |= ui.add(egui::DragValue::new(&mut st.text_size).range(8.0..=200.0).speed(0.5)).changed();
+                ui.spacing_mut().item_spacing.x = 3.0;
+                for (i, (label, tip)) in [("V", "Vänsterställd"), ("C", "Centrerad"), ("H", "Högerställd")].iter().enumerate() {
+                    if chip(ui, label, st.text_align == i as u8, None).on_hover_text(*tip).clicked() {
+                        st.text_align = i as u8;
+                        changed = true;
+                    }
+                }
+                ui.spacing_mut().item_spacing.x = 6.0;
                 divider(ui);
                 dim(ui, "Text");
                 changed |= swatches(ui, &mut st.text_color, &PALETTE[5..]);
@@ -1082,6 +1149,7 @@ impl Editor {
                 let next = d.next_weld_number(&st.methods, settings.numbering);
                 dim(ui, &format!("Nästa nr {next}"));
                 divider(ui);
+                ui.checkbox(&mut d.auto_number, "Löpnummer").on_hover_text("Numrera nya skarvar löpande utan att fråga efter numret");
                 changed |= ui.checkbox(&mut st.show_method, "Visa metod").changed();
                 egui::ComboBox::from_id_salt("brickform")
                     .selected_text(if st.marker_style == MarkerStyle::Avlang { "Avlång" } else { "Rektangel" })
@@ -1165,6 +1233,7 @@ impl Editor {
                     Kind::Text(t) => {
                         e.stroke = col(st.text_color);
                         t.size = st.text_size;
+                        t.align = st.text_align;
                         t.box_fill = st.text_box_fill.then(|| col(st.box_fill));
                         t.box_border = st.text_box_border.then(|| col(st.box_border));
                     }
@@ -1179,10 +1248,29 @@ impl Editor {
         }
 
         let mut start_ocr = false;
+        let mut more: Option<u8> = None;
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if icons::sized_button(ui, Icon::Ocr, "Läs av text i bilden (OCR)", false, 30.0).clicked() {
                 start_ocr = true;
             }
+            let is_sheet = d.sheet.is_some();
+            ui.menu_button("Mer", |ui| {
+                ui.set_min_width(210.0);
+                let mut item = |ui: &mut Ui, text: &str, n: u8| {
+                    if ui.add(egui::Button::new(text).min_size(vec2(200.0, 28.0))).clicked() {
+                        more = Some(n);
+                        ui.close();
+                    }
+                };
+                item(ui, "Förstora …", 1);
+                item(ui, "Komprimera och spara …", 2);
+                item(ui, "Karta …", 3);
+                item(ui, "Dela via mejl", 4);
+                if is_sheet {
+                    ui.separator();
+                    item(ui, "Exportera bladen till skrivbordet …", 5);
+                }
+            });
             divider(ui);
             if icons::sized_button(ui, Icon::Flip, "Spegelvänd", false, 30.0).clicked() {
                 d.flip_horizontal();
@@ -1205,6 +1293,14 @@ impl Editor {
         if start_ocr {
             let ctx = ui.ctx().clone();
             self.start_ocr(&ctx);
+        }
+        match more {
+            Some(1) => self.open_enlarge(),
+            Some(2) => self.open_compact(),
+            Some(3) => self.open_map(),
+            Some(4) => self.share_by_mail(),
+            Some(5) => self.open_sheet_export(),
+            _ => {}
         }
     }
 
@@ -1315,6 +1411,7 @@ impl Editor {
     }
 
     fn dialogs(&mut self, ctx: &egui::Context, settings: &mut Settings) {
+        self.tools_dialogs(ctx, settings);
         // ----- Osparade ändringar -----
         if let Some(what) = &self.confirm {
             let close_window = matches!(what, Confirm::CloseWindow);
@@ -1355,6 +1452,7 @@ impl Editor {
                     d.checkpoint();
                     self.dialog_saved = Some(id);
                 }
+                let mut auto_number = d.auto_number;
                 match d.get_mut(id) {
                     Some(el) => {
                         egui::Window::new("Ändra markering").open(&mut open).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO).show(ctx, |ui| {
@@ -1387,6 +1485,7 @@ impl Editor {
                                         w.colors = w.methods.iter().map(|c| methods.iter().find(|m| &m.code == c).map(|m| Color32::from_rgb(m.color[0], m.color[1], m.color[2])).unwrap_or(Color32::GRAY)).collect();
                                     }
                                     ui.checkbox(&mut w.show_method, "Visa metodbeteckningen");
+                                    ui.checkbox(&mut auto_number, "Fortsätt med löpnummer härifrån");
                                 }
                                 Kind::Film(f) => {
                                     ui.horizontal(|ui| {
@@ -1412,6 +1511,7 @@ impl Editor {
                     }
                     None => done = true,
                 }
+                d.auto_number = auto_number;
                 // Ett nytt filmformat ska få rätt storlek i skissens skala.
                 if d.px_per_cm > 0.0 {
                     let s = d.px_per_cm;

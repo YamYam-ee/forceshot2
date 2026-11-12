@@ -10,6 +10,7 @@ mod editor;
 mod icons;
 mod imaging;
 mod install;
+mod map;
 mod pdf;
 mod platform;
 mod settings;
@@ -37,7 +38,7 @@ fn uninstall() {
 }
 
 fn main() {
-    let mut startup = app::Startup { files: Vec::new(), sketch: None, tray_only: false, demo: None, capture: false, ocr: false, setup: None };
+    let mut startup = app::Startup { files: Vec::new(), sketch: None, tray_only: false, demo: None, capture: false, ocr: false, setup: None, dev: None };
     let (mut force_setup, mut auto, mut portable, mut dev) = (false, false, false, false);
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -67,6 +68,15 @@ fn main() {
             }
             // Utvecklingsläge: hämta senaste utgåvans Setup-fil oavsett version och
             // kontrollera den mot kontrollsumman, utan att köra den.
+            // Utvecklingsläge: hämta en karta över en adress och spara den som PNG.
+            "--karttest" => {
+                let (query, out) = (args.next().unwrap_or_default(), args.next().unwrap_or_default());
+                match map::fetch(&query, 16) {
+                    Ok(m) => println!("{} · {}x{} · sparad: {:?}", m.place, m.image.width(), m.image.height(), m.image.save(&out).is_ok()),
+                    Err(e) => println!("FEL: {e}"),
+                }
+                return;
+            }
             "--hamtningstest" => {
                 let repo = settings::Settings::load().update_repo;
                 match update::check_against(&repo, "0.0.0") {
@@ -83,6 +93,8 @@ fn main() {
             "--klipp" => (startup.capture, dev) = (true, true),
             "--ocr" => (startup.ocr, dev) = (true, true),
             "--demo" => (startup.demo, dev) = (Some(None), true),
+            "--fiberdemo" => (startup.dev, dev) = (Some(("fiber".into(), args.next().map(PathBuf::from))), true),
+            "--ytademo" => (startup.dev, dev) = (Some(("yta".into(), args.next().map(PathBuf::from))), true),
             "--demo-ut" => (startup.demo, dev) = (Some(args.next().map(PathBuf::from)), true),
             other if !other.starts_with("--") => {
                 // Fullständig sökväg, så att en redan körande instans hittar filen.

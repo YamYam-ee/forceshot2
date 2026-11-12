@@ -82,6 +82,8 @@ mellanfilerna utanför den: skapa `.cargo\config.toml` med `[build]` och
 | `TRK-ForceShot --skiss tankskiss` | Öppnar en skiss direkt |
 | `TRK-ForceShot --klipp` | Går rakt till markeringsläget |
 | `TRK-ForceShot --ocr bild.png` | Öppnar bilden och läser av texten direkt |
+| `TRK-ForceShot --fiberdemo [mapp]` | Två fiberblad av påhittade foton, exporteras till mappen |
+| `TRK-ForceShot --ytademo [fil.png]` | En arbetsyta med innehåll i och utanför guiden |
 | `TRK-ForceShot --demo` | Provbild med varje objekttyp (`--demo-ut fil.png` exporterar den) |
 
 ## Snabbtangenter
@@ -97,28 +99,57 @@ mellanfilerna utanför den: skapa `.cargo\config.toml` med `[build]` och
 verktygstangenter som i version 1 (`V T R E L A H F W O M C`), plus `G` för
 filmmarkering.
 
-## Vad som finns och inte finns jämfört med version 1
+## Funktioner
 
-Finns: skärmklipp (område, hel skärm, aktivt fönster, samma område),
-förstoringsglas, flikar, text, rektangel, ellips, linje, pil, frihand,
-överstrykning (multiplikation), oskärpa, mosaik, svetsskarvar med metoder och
-löpnummer, filmmarkeringar med gemensam skala, beskär, rotera, spegelvänd,
-vridning av objekt, ångra/gör om, kopiera/klistra in objekt och bilder,
-spara som PNG/JPEG/BMP, båda skisserna, radera element, textavläsning (OCR) och
-öppna PDF.
+**Skärmklipp:** område, hel skärm, aktivt fönster och samma område igen, med
+förstoringsglas och åtgärdsrad.
 
-- **Radera element** (`D`): dra en ruta över det som ska bort. Ytan fylls i från
-  omgivningen och går att flytta och ändra i efterhand. Bara ruta, ingen pensel.
-- **Textavläsning**: knappen längst till höger i alternativraden. Läser svenska
-  med Windows inbyggda textigenkänning och låter dig kopiera texten. Att byta ut
-  en rad i bilden finns inte än, och på Mac saknas avläsningen helt.
-- **PDF**: varje sida blir en egen flik (150 dpi, högst 40 sidor åt gången).
-  Sidorna sparas som bilder; att spara tillbaka som PDF finns inte än.
+**Redigeraren:** flikar, text (vänster, centrerad, höger), rektangel, ellips,
+linje, pil, frihand, överstrykning, oskärpa, mosaik, radera element, beskär,
+rotera, spegelvänd, vridning av objekt, ångra/gör om, kopiera och klistra in
+objekt och bilder.
 
-**Inte flyttat än:** förstora/förbättra, fiberskiss, karta, ForceSpace, dela via mejl, högerklicksmenyn i
-Utforskaren, dra ut flikar till
-egna fönster, klick för att ta fönstret under pekaren, markering över flera
-skärmar samtidigt.
+**Provning:** svetsskarvar med metoder och löpnummer, filmmarkeringar med
+gemensam skala, Bottenskiss och Tankskiss.
+
+- **Skarvnummer** frågas när skarven sätts ut. Kryssa i *Fortsätt med löpnummer
+  härifrån* (eller *Löpnummer* i verktygsraden) så numreras resten av bilden av
+  sig själv.
+- **Fiberskiss** (plusknappen → *Fiberskiss*): fyra stående foton per blad med
+  filnamnet som text i varje fack. Liggande bilder vänds. Bilderna går att
+  flytta, förstora och vrida i sitt fack; den vita ramen ligger alltid överst.
+  *Mer → Exportera bladen till skrivbordet* skriver alla blad som
+  `<provningsnummer>-skiss-1`, `-2` … i valt format, kvalitet och bredd.
+- **Arbetsyta / ForceSpace** (plusknappen → *Ny arbetsyta*): en vit yta där allt
+  får ligga var som helst. Den streckade guiden (565 × 744) är det som blir bild.
+- **Förstora** (*Mer → Förstora*): 2×, 3× eller 4× med bildtyperna skärmklipp,
+  inskannat dokument och foto. Annoteringarna följer med.
+- **Komprimera** (*Mer → Komprimera och spara*): mindre JPEG med vald största
+  sida och kvalitet.
+- **Karta** (*Mer → Karta*): kartbild över en adress från OpenStreetMap, inlagd
+  som ett objekt med upphovstext.
+- **Dela via mejl** (*Mer → Dela via mejl*): öppnar ett nytt mejl med bilden
+  bifogad. Ingenting skickas av appen.
+- **Textavläsning (OCR):** läser svenska med Windows inbyggda textigenkänning.
+- **PDF:** öppnas med en flik per sida (150 dpi, högst 40 sidor). En bild kan
+  sparas som ensidig PDF.
+- **Filformat:** öppnar PNG, JPEG, BMP, TIFF, GIF, WebP och PDF; sparar PNG,
+  JPEG, BMP, TIFF, GIF och PDF.
+- **Högerklick i Utforskaren:** *Redigera med TRK ForceShot* på bilder och
+  PDF:er (i Windows 11 under *Visa fler alternativ*). Läggs dit av installationen.
+
+### Skillnader mot version 1
+
+- Flikar kan inte dras ut till egna fönster.
+- En markering kan inte gå över flera skärmar, och ett klick tar inte fönstret
+  under pekaren.
+- Arbetsytans guide har fast storlek och kan inte flyttas.
+- Förstora och komprimera saknar förhandsvisning före/efter.
+- Kartan kan inte panoreras eller zoomas i dialogrutan; välj utsnitt och lägg in.
+- Radera element finns bara som ruta, inte som pensel.
+- OCR kan inte byta ut en rad i bilden.
+- Flera sidor kan inte sparas tillbaka som en PDF.
+- Snabbtangenter ändras genom att skriva kombinationen som text.
 
 ## Läget på macOS
 
@@ -142,6 +173,8 @@ Developer-certifikat måste den ges om efter varje nytt bygge.
 | `src/editor/render.rs` | Export i full upplösning via grafikkortet |
 | `src/install.rs` | Installation, avinstallation, autostart och en-instans-låset (Windows) |
 | `src/update.rs` | Uppdateringskoll och hämtning från GitHub |
+| `src/editor/tools.rs` | Fiberskiss, bladexport, förstora, komprimera, arbetsyta, karta, mejl |
+| `src/map.rs` | Adressökning och kartbild från OpenStreetMap |
 | `src/pdf.rs` | Öppnar PDF-filer sida för sida |
 | `src/imaging.rs` | Oskärpa, mosaik, överstrykning och radering (inpainting) |
 | `src/sketch.rs` | Skissflikarna (webbvy) och bryggan till redigeraren |

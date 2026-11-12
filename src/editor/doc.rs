@@ -13,6 +13,8 @@ pub struct TextData {
     pub size: f32,
     pub box_fill: Option<Color32>,
     pub box_border: Option<Color32>,
+    /// 0 vänster, 1 centrerat, 2 höger.
+    pub align: u8,
 }
 
 #[derive(Clone, Debug)]
@@ -65,6 +67,9 @@ pub enum Kind {
     Weld(WeldData),
     Film(FilmData),
     Image(Arc<RgbaImage>),
+    /// Fiberbladets vita ram: fält som alltid ligger överst och gömmer det som sticker
+    /// ut ur facken. Går inte att markera, flytta eller ta bort.
+    SheetFrame(Vec<Rect>),
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -172,6 +177,7 @@ impl Element {
                     || p.distance(self.a) <= 6.0 * w.scale + tol
                     || dist_to_segment(p, self.a, self.b) <= tol + 1.5
             }
+            Kind::SheetFrame(_) => false,
             _ => self.rect().expand(tol).contains(self.to_local(p)),
         }
     }
@@ -189,6 +195,7 @@ impl Element {
     /// Omslutande ruta i bildens koordinater, med hänsyn till vridning.
     pub fn bounds(&self) -> Rect {
         match &self.kind {
+            Kind::SheetFrame(_) => Rect::NOTHING,
             Kind::Weld(_) => Rect::from_two_pos(self.a, self.a).union(self.badge_rect()),
             _ if self.rot != 0.0 => {
                 let r = self.rect();
@@ -206,7 +213,7 @@ impl Element {
                 out.push((Handle::A, self.a));
                 out.push((Handle::B, self.b));
             }
-            Kind::Free(_) => {}
+            Kind::Free(_) | Kind::SheetFrame(_) => {}
             _ => {
                 let r = self.rect();
                 let c = r.center();
@@ -314,6 +321,12 @@ pub struct Doc {
     next_id: u64,
     /// Skissens skala för filmmarkeringar. 0 = inte kalibrerad.
     pub px_per_cm: f32,
+    /// Fiberblad: namnet bladet exporteras under.
+    pub sheet: Option<String>,
+    /// Arbetsyta: innehållet får ligga utanför bilden, som då är guiden.
+    pub space: bool,
+    /// Nya svetsskarvar numreras löpande utan att fråga.
+    pub auto_number: bool,
 }
 
 impl Doc {
@@ -333,6 +346,9 @@ impl Doc {
             fit: true,
             next_id: 1,
             px_per_cm: 0.0,
+            sheet: None,
+            space: false,
+            auto_number: false,
         }
     }
 
@@ -386,7 +402,13 @@ impl Doc {
     pub fn add(&mut self, mut el: Element) -> u64 {
         el.id = self.new_id();
         let id = el.id;
-        self.els.push(el);
+        // Fiberbladets ram ska alltid ligga överst.
+        if matches!(self.els.last().map(|e| &e.kind), Some(Kind::SheetFrame(_))) && !matches!(el.kind, Kind::SheetFrame(_)) {
+            let at = self.els.len() - 1;
+            self.els.insert(at, el);
+        } else {
+            self.els.push(el);
+        }
         id
     }
 
@@ -442,6 +464,25 @@ impl Doc {
                 e.b = r.max;
             }
         }
+    }
+
+    /// Räknar om alla objekt när underlaget förstorats `k` gånger.
+    pub fn scale_elements(&mut self, k: f32) {
+        let s = |p: Pos2| pos2(p.x * k, p.y * k);
+        for e in &mut self.els {
+            e.a = s(e.a);
+            e.b = s(e.b);
+            e.width *= k;
+            match &mut e.kind {
+                Kind::Free(pts) => pts.iter_mut().for_each(|p| *p = s(*p)),
+                Kind::Text(t) => t.size *= k,
+                Kind::Weld(w) => w.scale *= k,
+                Kind::Blur(v) | Kind::Mosaic(v) => *v *= k,
+                Kind::SheetFrame(bars) => bars.iter_mut().for_each(|b| *b = Rect::from_min_max(s(b.min), s(b.max))),
+                _ => {}
+            }
+        }
+        self.px_per_cm *= k;
     }
 
     fn remap(&mut self, f: impl Fn(Pos2) -> Pos2, quarter_turn: f32, mirror: bool) {

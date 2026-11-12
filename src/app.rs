@@ -62,6 +62,8 @@ pub struct Startup {
     pub ocr: bool,
     /// Installationsläge. Sant = installera utan att fråga (uppdatering).
     pub setup: Option<bool>,
+    /// Utvecklingslägen för fiberblad och arbetsyta: (läge, valfri utfil eller utmapp).
+    pub dev: Option<(String, Option<PathBuf>)>,
 }
 
 pub struct App {
@@ -591,6 +593,11 @@ impl ApplicationHandler<UserEvent> for App {
         }
         if let Some(out) = startup.demo.clone() {
             self.editor.demo(&self.settings, out);
+        }
+        match startup.dev.clone() {
+            Some((mode, out)) if mode == "fiber" => self.editor.fiber_demo(out, &self.settings),
+            Some((_, out)) => self.editor.space_demo(out),
+            None => {}
         }
         if startup.capture {
             self.start_capture(Action::Region, el);
