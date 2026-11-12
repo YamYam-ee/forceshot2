@@ -24,7 +24,10 @@ pub struct WeldData {
     pub number: String,
     pub show_method: bool,
     pub style: MarkerStyle,
+    /// Brickans storlek.
     pub scale: f32,
+    /// Prickens storlek vid skarven, oberoende av brickan.
+    pub dot: f32,
     /// Egen text i stället för metodkod.
     pub free_text: Option<String>,
 }
@@ -174,7 +177,7 @@ impl Element {
             Kind::Free(pts) => pts.windows(2).any(|w| dist_to_segment(p, w[0], w[1]) <= tol + self.width / 2.0),
             Kind::Weld(w) => {
                 self.badge_rect().expand(tol).contains(p)
-                    || p.distance(self.a) <= 6.0 * w.scale + tol
+                    || p.distance(self.a) <= 6.0 * w.dot + tol
                     || dist_to_segment(p, self.a, self.b) <= tol + 1.5
             }
             Kind::SheetFrame(_) => false,
@@ -488,7 +491,10 @@ impl Doc {
             match &mut e.kind {
                 Kind::Free(pts) => pts.iter_mut().for_each(|p| *p = s(*p)),
                 Kind::Text(t) => t.size *= k,
-                Kind::Weld(w) => w.scale *= k,
+                Kind::Weld(w) => {
+                    w.scale *= k;
+                    w.dot *= k;
+                }
                 Kind::Blur(v) | Kind::Mosaic(v) => *v *= k,
                 Kind::SheetFrame(bars) => bars.iter_mut().for_each(|b| *b = Rect::from_min_max(s(b.min), s(b.max))),
                 _ => {}
@@ -607,7 +613,7 @@ mod tests {
     fn weld_numbers_count_per_method() {
         let mut d = doc();
         let weld = |m: &str, n: &str| {
-            Kind::Weld(WeldData { methods: vec![m.into()], colors: vec![Color32::RED], number: n.into(), show_method: true, style: MarkerStyle::Avlang, scale: 1.0, free_text: None })
+            Kind::Weld(WeldData { methods: vec![m.into()], colors: vec![Color32::RED], number: n.into(), show_method: true, style: MarkerStyle::Avlang, scale: 1.0, dot: 1.0, free_text: None })
         };
         d.add(el(weld("RT", "1"), Pos2::ZERO, Pos2::ZERO));
         d.add(el(weld("RT", "2"), Pos2::ZERO, Pos2::ZERO));
@@ -636,7 +642,7 @@ mod tests {
 
     #[test]
     fn weld_label_formats() {
-        let mut w = WeldData { methods: vec!["RT".into(), "MT".into()], colors: vec![], number: "7".into(), show_method: true, style: MarkerStyle::Avlang, scale: 1.0, free_text: None };
+        let mut w = WeldData { methods: vec!["RT".into(), "MT".into()], colors: vec![], number: "7".into(), show_method: true, style: MarkerStyle::Avlang, scale: 1.0, dot: 1.0, free_text: None };
         assert_eq!(w.label(), "RT+MT-7");
         w.show_method = false;
         assert_eq!(w.label(), "7");

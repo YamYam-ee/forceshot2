@@ -225,7 +225,7 @@ impl Canvas {
                 let methods = if st.methods.is_empty() { vec!["RT".to_string()] } else { st.methods.clone() };
                 let colors = methods.iter().map(|m| settings.method_color(m)).collect();
                 let number = doc.next_weld_number(&methods, settings.numbering).to_string();
-                Kind::Weld(WeldData { methods, colors, number, show_method: st.show_method, style: st.marker_style, scale: st.marker_scale, free_text: None })
+                Kind::Weld(WeldData { methods, colors, number, show_method: st.show_method, style: st.marker_style, scale: st.marker_scale, dot: st.marker_dot, free_text: None })
             }
             Tool::Film => {
                 let (w_cm, h_cm) = FILM_FORMATS[st.film_format.min(FILM_FORMATS.len() - 1)];
@@ -608,7 +608,8 @@ impl Canvas {
         // Rullhjulet zoomar kring pekaren.
         let (scroll, pinch, hover, space, shift) =
             ctx.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.pointer.hover_pos(), i.key_down(Key::Space), i.modifiers.shift));
-        if let Some(p) = hover.filter(|p| rect.contains(*p)) {
+        // Bara när pekaren verkligen är över ritytan, inte över en dialogruta eller meny ovanpå den.
+        if let Some(p) = hover.filter(|p| rect.contains(*p) && resp.contains_pointer()) {
             let factor = pinch * (scroll.y * 0.0028).exp();
             if (factor - 1.0).abs() > 1e-4 {
                 let new = (doc.zoom * factor).clamp(0.03, 40.0);

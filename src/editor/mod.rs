@@ -491,6 +491,7 @@ impl Editor {
                 show_method: true,
                 style,
                 scale: 1.3,
+                dot: 1.3,
                 free_text: None,
             })
         };
@@ -1241,6 +1242,14 @@ impl Editor {
             },
             (t, _) => t,
         };
+        // En markerad skarv visar sina egna värden, så att reglagen ändrar just den
+        // och inte skriver över den med det som senast ställdes in.
+        if let (Tool::Select, Some(Kind::Weld(w))) = (self.canvas.tool, &sel_kind) {
+            st.marker_scale = w.scale;
+            st.marker_dot = w.dot;
+            st.show_method = w.show_method;
+            st.marker_style = w.style;
+        }
         match tool {
             Tool::Select => {
                 dim(ui, "Klicka på ett objekt för att flytta eller ändra det. Dra en ruta för att markera flera.");
@@ -1325,8 +1334,10 @@ impl Editor {
                         changed |= ui.selectable_value(&mut st.marker_style, MarkerStyle::Avlang, "Avlång").changed();
                         changed |= ui.selectable_value(&mut st.marker_style, MarkerStyle::Rektangel, "Rektangel").changed();
                     });
-                dim(ui, "Storlek");
-                changed |= ui.add(egui::Slider::new(&mut st.marker_scale, 0.6..=3.0).fixed_decimals(1)).changed();
+                dim(ui, "Bricka");
+                changed |= ui.add(egui::Slider::new(&mut st.marker_scale, 0.6..=3.0).fixed_decimals(1)).on_hover_text("Brickans storlek").changed();
+                dim(ui, "Prick");
+                changed |= ui.add(egui::Slider::new(&mut st.marker_dot, 0.3..=4.0).fixed_decimals(1)).on_hover_text("Prickens storlek vid skarven").changed();
             }
             Tool::Film => {
                 dim(ui, "Format");
@@ -1408,6 +1419,7 @@ impl Editor {
                         w.show_method = st.show_method;
                         w.style = st.marker_style;
                         w.scale = st.marker_scale;
+                        w.dot = st.marker_dot;
                     }
                     _ => {}
                 }

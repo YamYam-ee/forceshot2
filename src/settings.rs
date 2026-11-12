@@ -101,6 +101,8 @@ pub struct ToolStyle {
     pub show_method: bool,
     pub marker_style: MarkerStyle,
     pub marker_scale: f32,
+    /// Prickens storlek vid skarven.
+    pub marker_dot: f32,
     pub film_format: usize,
     pub film_landscape: bool,
     pub px_per_cm: f32,
@@ -128,6 +130,7 @@ impl Default for ToolStyle {
             show_method: true,
             marker_style: MarkerStyle::Avlang,
             marker_scale: 1.0,
+            marker_dot: 1.0,
             film_format: 3,
             film_landscape: false,
             px_per_cm: 0.0,

@@ -206,8 +206,10 @@ fn weld(el: &Element, w: &WeldData, xf: &Xf, res: &Res, out: &mut Vec<Shape>) {
         out.push(Shape::line_segment([a, b], Stroke::new(3.4 * k, Color32::from_black_alpha(60))));
         out.push(Shape::line_segment([a, b], Stroke::new(2.0 * k, first)));
     }
-    out.push(Shape::circle_filled(a, 5.6 * k, hair));
-    out.push(Shape::circle_filled(a, 4.6 * k, first));
+    // Pricken har sin egen storlek.
+    let kd = xf.s * w.dot;
+    out.push(Shape::circle_filled(a, 4.6 * kd + 1.0 * k.min(kd), hair));
+    out.push(Shape::circle_filled(a, 4.6 * kd, first));
 
     // Två förskjutna kopior med låg täckning ger en mjuk skugga.
     out.push(Shape::rect_filled(badge.translate(vec2(0.0, 2.6 * k)).expand(0.8 * k), radius, Color32::from_black_alpha(34)));

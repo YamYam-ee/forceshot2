@@ -48,9 +48,9 @@ version med en Setup-fil bifogad visas en ruta med *Ladda ner och uppdatera*,
 
 Så här lägger du upp en ny version:
 
-1. `.\build.ps1 -Version 2.2.0`
-2. Skapa en release i repot med taggen `v2.2.0`.
-3. Bifoga `dist\TRK ForceShot Setup 2.2.0.exe`.
+1. `.\build.ps1 -Version 2.2.1`
+2. Skapa en release i repot med taggen `v2.2.1`.
+3. Bifoga `dist\TRK ForceShot Setup 2.2.1.exe`.
 4. Beskrivningen är det användaren ser som "vad som är nytt".
 
 Version 1 har sitt eget repo för utgåvor (`YamYam-ee/forceshot`), så de två
@@ -115,7 +115,8 @@ linje, pil, frihand, överstrykning, oskärpa, mosaik, radera element, beskär,
 rotera, spegelvänd, vridning av objekt, ångra/gör om, kopiera och klistra in
 objekt och bilder.
 
-**Provning:** svetsskarvar med metoder och löpnummer, filmmarkeringar med
+**Provning:** svetsskarvar med metoder och löpnummer (brickan och pricken vid
+skarven har var sin storlek), filmmarkeringar med
 gemensam skala, Bottenskiss och Tankskiss.
 
 - **Skarvnummer** frågas när skarven sätts ut. Kryssa i *Fortsätt med löpnummer
@@ -160,6 +161,12 @@ gemensam skala, Bottenskiss och Tankskiss.
 - En PDF som sparas består av bilder; texten i den går inte att markera.
 
 ## Läget på macOS
+
+Utgåvorna har en Mac-fil, `TRK-ForceShot-mac-<version>.zip`, som byggs av
+GitHub Actions (*Actions → Mac-bygge → Run workflow*, ange utgåvans tagg). Den går
+på både Apple Silicon och Intel. Appen är inte signerad med ett Apple-certifikat, så
+första gången måste den godkännas under *Systeminställningar → Integritet och
+säkerhet → Öppna ändå*.
 
 Mac-koden är typkontrollerad (`cargo check --target aarch64-apple-darwin`) men
 **har aldrig körts på en Mac**. Räkna med justeringar första gången, främst i
