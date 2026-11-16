@@ -348,7 +348,10 @@ impl Overlay {
         } else {
             // Fönstret under pekaren lyfts fram: det är det ett klick tar.
             let hover = own.filter(|p| full.contains(*p) && !dragging).and_then(|p| self.window_at(to_desk(p))).map(|r| Rect::from_min_max(to_scr(r.min), to_scr(r.max)));
-            dim_around(hover, Color32::from_black_alpha(70));
+            // Hela skärmen mörknar direkt, så att det syns att klippläget är igång även när
+            // fönstret under pekaren täcker hela skärmen. Det fönstret hålls bara lite ljusare.
+            painter.rect_filled(full, 0.0, Color32::from_black_alpha(55));
+            dim_around(hover, Color32::from_black_alpha(55));
             if let Some(h) = hover {
                 painter.rect_stroke(h.intersect(full), 0.0, Stroke::new(2.0, Color32::from_rgba_unmultiplied(0x2D, 0xD4, 0xBF, 0xC8)), StrokeKind::Inside);
             }

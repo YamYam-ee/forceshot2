@@ -1275,7 +1275,7 @@ dependencies = [
 
 [[package]]
 name = "forceshot"
-version = "2.2.6"
+version = "2.2.7"
 dependencies = [
  "arboard",
  "base64",

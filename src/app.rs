@@ -869,11 +869,16 @@ impl ApplicationHandler<UserEvent> for App {
         if self.settings.check_updates && !self.settings.update_repo.trim().is_empty() && startup.demo.is_none() {
             // Tyst koll: hittas ingenting, eller svarar inte nätet, händer ingenting.
             let (proxy, repo, skipped) = (self.proxy.clone(), self.settings.update_repo.clone(), self.settings.skipped_update.clone());
+            // Programmet ligger ofta igång i dagar, så det räcker inte att titta vid start.
             std::thread::spawn(move || {
-                if let Ok(Some(release)) = crate::update::check(&repo) {
-                    if release.version != skipped {
-                        let _ = proxy.send_event(UserEvent::Update(release));
+                loop {
+                    if let Ok(Some(release)) = crate::update::check(&repo) {
+                        if release.version != skipped {
+                            let _ = proxy.send_event(UserEvent::Update(release));
+                            return;
+                        }
                     }
+                    std::thread::sleep(Duration::from_secs(4 * 3600));
                 }
             });
         }
