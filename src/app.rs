@@ -251,6 +251,10 @@ pub fn run(startup: Startup) {
         diag_cur: None,
         setup: None,
     };
+    // Rå inmatning stängs av. Annars slutar Windows skicka tangenterna till programmets egen
+    // tangentkrok så fort något av dess fönster ligger överst, och då går PrintScreen till
+    // nästa klipprogram i stället för hit.
+    event_loop.listen_device_events(winit::event_loop::DeviceEvents::Never);
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("Händelseloopen avslutades med fel: {e}");
     }
