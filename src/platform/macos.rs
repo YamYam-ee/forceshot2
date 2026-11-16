@@ -51,6 +51,10 @@ pub fn early_press() -> Option<((i32, i32), Option<(i32, i32)>)> {
     None
 }
 
+pub fn key_time() -> Option<std::time::Instant> {
+    None
+}
+
 pub fn early_idle_stop() {}
 
 pub fn early_cancel() {}

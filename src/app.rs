@@ -94,6 +94,10 @@ pub struct App {
     spares: Vec<(WindowId, [i32; 4])>,
     /// När nya klippfönster ska förberedas efter ett klipp.
     refill_at: Option<Instant>,
+    /// Mätning av de senaste klippen: hur lång tid varje steg tog. Kopieras från menyn.
+    diag: Vec<String>,
+    /// Klippet som pågår: när det började, raden som byggs och antalet ritade bilder.
+    diag_cur: Option<(Instant, String, u32)>,
     setup: Option<SetupUi>,
 }
 /// Installationsfönstrets tillstånd.
@@ -216,7 +220,15 @@ pub fn run(startup: Startup) {
             let _ = proxy.send_event(UserEvent::Repaint(info.viewport_id, Instant::now() + info.delay));
         });
     }
-    let painter = pollster::block_on(Painter::new(ctx.clone(), egui_wgpu::WgpuConfiguration::default(), false, egui_wgpu::RendererOptions::default()));
+    // Det strömsnåla grafikkortet väljs: på bärbara datorer somnar det kraftfulla mellan
+    // klippen och behöver väckas varje gång, och här ritas ändå bara en bild och några linjer.
+    let mut gpu = egui_wgpu::WgpuConfiguration::default();
+    if let egui_wgpu::WgpuSetup::CreateNew(new) = &mut gpu.wgpu_setup {
+        if std::env::var_os("WGPU_POWER_PREF").is_none() {
+            new.power_preference = egui_wgpu::wgpu::PowerPreference::LowPower;
+        }
+    }
+    let painter = pollster::block_on(Painter::new(ctx.clone(), gpu, false, egui_wgpu::RendererOptions::default()));
     let mut app = App {
         proxy,
         ctx,
@@ -235,6 +247,8 @@ pub fn run(startup: Startup) {
         next_vid: 1,
         spares: Vec::new(),
         refill_at: None,
+        diag: Vec::new(),
+        diag_cur: None,
         setup: None,
     };
     if let Err(e) = event_loop.run_app(&mut app) {
@@ -268,6 +282,7 @@ impl App {
         }
         entries.push(Box::new(PredefinedMenuItem::separator()));
         entries.push(Box::new(item("settings", "Inställningar")));
+        entries.push(Box::new(item("diag", "Kopiera klippmätning")));
         entries.push(Box::new(item("quit", "Avsluta")));
         for e in &entries {
             let _ = menu.append(e.as_ref());
@@ -476,6 +491,31 @@ impl App {
         }
     }
 
+    /// Mätningen som text: dator, grafik, skärmar och stegen i de senaste klippen.
+    fn diag_text(&self) -> String {
+        let mut out = format!("TRK ForceShot {} klippmätning
+", env!("CARGO_PKG_VERSION"));
+        if let Some(rs) = self.painter.render_state() {
+            let i = rs.adapter.get_info();
+            out += &format!("grafik: {} | {:?} | {:?} | {} {}
+", i.name, i.backend, i.device_type, i.driver, i.driver_info);
+        }
+        out += &format!("skärmar: {:?}
+", platform::monitor_list());
+        out += &format!("fönster: {} st, varav {} färdiga klippfönster, igång {} s
+", self.wins.len(), self.spares.len(), self.start.elapsed().as_secs());
+        if self.diag.is_empty() {
+            out += "inga klipp gjorda sedan start
+";
+        }
+        for line in &self.diag {
+            out += line;
+            out += "
+";
+        }
+        out
+    }
+
     fn overlay_attrs(rect: [i32; 4]) -> winit::window::WindowAttributes {
         let [x, y, w, h] = rect;
         let attrs = Window::default_attributes()
@@ -536,6 +576,16 @@ impl App {
         for id in ids {
             self.close_window(id);
         }
+        if let Some((t, mut line, _)) = self.diag_cur.take() {
+            line += &format!(" | stängt {}", t.elapsed().as_millis());
+            self.diag.push(line);
+            if self.diag.len() > 12 {
+                self.diag.remove(0);
+            }
+        }
+        if std::env::var_os("FORCESHOT_TID").is_some() {
+            eprintln!("{}", self.diag_text());
+        }
         platform::early_cancel();
         // Nya fönster till nästa klipp, strax efter att det här är omhändertaget.
         self.refill_at = Some(Instant::now() + Duration::from_millis(300));
@@ -561,7 +611,11 @@ impl App {
             return;
         }
         let t0 = Instant::now();
+        // Tiden från tangenten tills programmet hann börja: lång om det var upptaget.
+        let key = platform::key_time().filter(|k| k.elapsed() < Duration::from_secs(5));
+        let waited = key.map(|k| k.elapsed().as_millis());
         let shots = platform::capture_monitors(self.settings.include_cursor);
+        self.diag_cur = Some((key.unwrap_or(t0), format!("{:?}: väntan {:?} skärmbild {}", action, waited, t0.elapsed().as_millis()), 0));
         if std::env::var_os("FORCESHOT_TID").is_some() {
             eprintln!("tid: skärmbild {} ms", t0.elapsed().as_millis());
         }
@@ -605,7 +659,9 @@ impl App {
     fn open_overlay(&mut self, shots: Vec<Shot>, el: &ActiveEventLoop) {
         let t0 = Instant::now();
         let timing = std::env::var_os("FORCESHOT_TID").is_some();
+        let steps = std::cell::RefCell::new(String::new());
         let tick = |what: &str| {
+            steps.borrow_mut().push_str(&format!(" {what} {}", t0.elapsed().as_millis()));
             if timing {
                 eprintln!("tid: {what} vid {} ms", t0.elapsed().as_millis());
             }
@@ -655,6 +711,11 @@ impl App {
                 w.window.request_redraw();
             }
             tick("visat");
+        }
+        if let Some((_, line, _)) = self.diag_cur.as_mut() {
+            *line += " | öppning:";
+            *line += &steps.borrow();
+            *line += " | bilder:";
         }
         // Härifrån tar fönstren emot musen själva.
         platform::early_idle_stop();
@@ -767,6 +828,13 @@ impl App {
         let prims = self.ctx.tessellate(out.shapes, out.pixels_per_point);
         self.pending.append(out.textures_delta);
         self.painter.paint_and_update_textures(win.vid, out.pixels_per_point, [0.07, 0.078, 0.094, 1.0], &prims, &mut self.pending, vec![], &window);
+        if let (Kind::Overlay(i), Some((t, line, n))) = (paint_kind, self.diag_cur.as_mut()) {
+            // De första bilderna: när de ritades (från tangenten) och hur länge ritningen tog.
+            if *n < 8 {
+                *n += 1;
+                *line += &format!(" s{i}@{}:{}", t.elapsed().as_millis(), paint_start.elapsed().as_millis());
+            }
+        }
         if let (Kind::Overlay(i), true) = (paint_kind, std::env::var_os("FORCESHOT_TID").is_some()) {
             eprintln!("bild {i} {} {}", self.start.elapsed().as_millis(), paint_start.elapsed().as_micros());
         }
@@ -967,6 +1035,13 @@ impl ApplicationHandler<UserEvent> for App {
                 "settings" => {
                     self.editor.show_settings();
                     self.show_editor(el);
+                }
+                "diag" => {
+                    let text = self.diag_text();
+                    let _ = std::fs::write(crate::settings::config_dir().join("klippmatning.txt"), &text);
+                    if let Ok(mut c) = arboard::Clipboard::new() {
+                        let _ = c.set_text(text);
+                    }
                 }
                 "quit" => {
                     self.settings.save();

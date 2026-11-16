@@ -352,6 +352,9 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
                     .iter()
                     .find(|(c, vk, _)| *vk == info.vkCode && c.ctrl == ctrl && c.alt == alt && c.shift == shift && c.meta == meta);
                 if let Some((_, _, action)) = hit {
+                    if let Ok(mut k) = KEY_AT.lock() {
+                        *k = Some(std::time::Instant::now());
+                    }
                     if *action == Action::Region {
                         early_arm();
                     }
@@ -362,6 +365,13 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
         }
     }
     unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) }
+}
+
+static KEY_AT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+/// När snabbtangenten senast trycktes, för mätningen av hur fort klippläget öppnas.
+pub fn key_time() -> Option<std::time::Instant> {
+    KEY_AT.lock().ok()?.take()
 }
 
 // ----- Tidig mus -----
