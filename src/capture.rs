@@ -70,10 +70,13 @@ pub struct Overlay {
     pub outcome: Option<Outcome>,
     /// Sant när något ändrats som de andra skärmarna också ska rita.
     pub changed: bool,
+    /// Pekarens läge när överlägget öppnades, tills musen rör sig. Utan det är första
+    /// bilden ritad som om pekaren inte fanns, och allt hoppar till vid första rörelsen.
+    seed: Option<Pos2>,
 }
 
 impl Overlay {
-    pub fn new(shots: Vec<Shot>, windows: Vec<[i32; 4]>, settings: &Settings) -> Self {
+    pub fn new(shots: Vec<Shot>, windows: Vec<[i32; 4]>, cursor: Option<(i32, i32)>, settings: &Settings) -> Self {
         let n = shots.len();
         let bounds = shots.iter().map(shot_rect).reduce(|a, b| a.union(b)).unwrap_or(Rect::ZERO);
         Self {
@@ -93,6 +96,7 @@ impl Overlay {
             after: settings.after_capture,
             outcome: None,
             changed: false,
+            seed: cursor.map(|(x, y)| pos2(x as f32, y as f32)),
         }
     }
 
@@ -159,6 +163,11 @@ impl Overlay {
 
         // ----- Mus -----
         let own = ctx.input(|inp| inp.pointer.latest_pos());
+        if own.is_some() && self.seed.is_some() {
+            self.seed = None;
+            self.changed = true;
+        }
+        let own = own.or_else(|| self.seed.filter(|p| home.contains(*p)).map(to_scr));
         if resp.drag_started_by(egui::PointerButton::Primary) {
             if let Some(p) = ctx.input(|inp| inp.pointer.press_origin()) {
                 self.drag_from = Some((i, to_desk(p)));
@@ -434,7 +443,7 @@ mod tests {
     #[test]
     fn a_click_picks_the_topmost_window() {
         let shots = vec![shot(0, 0, 800, 600, 1, [0, 0, 0])];
-        let o = Overlay::new(shots, vec![[100, 100, 200, 150], [50, 50, 600, 400], [700, 500, 400, 400]], &Settings::default());
+        let o = Overlay::new(shots, vec![[100, 100, 200, 150], [50, 50, 600, 400], [700, 500, 400, 400]], None, &Settings::default());
         assert_eq!(o.window_at(pos2(150.0, 150.0)), Some(Rect::from_min_size(pos2(100.0, 100.0), vec2(200.0, 150.0))));
         assert_eq!(o.window_at(pos2(400.0, 300.0)), Some(Rect::from_min_size(pos2(50.0, 50.0), vec2(600.0, 400.0))));
         // Ett fönster som sticker ut utanför skärmen klipps vid kanten.

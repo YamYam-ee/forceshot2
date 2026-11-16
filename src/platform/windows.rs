@@ -98,19 +98,19 @@ unsafe fn draw_cursor(dc: HDC, ox: i32, oy: i32) {
 
 /// En frusen bild per skärm.
 pub fn capture_monitors(include_cursor: bool) -> Vec<Shot> {
-    monitor_rects()
-        .into_iter()
-        .filter_map(|r| {
-            let (w, h) = (r.right - r.left, r.bottom - r.top);
-            grab(r.left, r.top, w, h, include_cursor).map(|image| Shot {
-                x: r.left,
-                y: r.top,
-                w: w as u32,
-                h: h as u32,
-                image: Arc::new(image),
-            })
-        })
-        .collect()
+    let one = |r: &RECT| {
+        let (w, h) = (r.right - r.left, r.bottom - r.top);
+        grab(r.left, r.top, w, h, include_cursor).map(|image| Shot { x: r.left, y: r.top, w: w as u32, h: h as u32, image: Arc::new(image) })
+    };
+    let rects = monitor_rects();
+    if rects.len() < 2 {
+        return rects.iter().filter_map(one).collect();
+    }
+    // Skärmarna läses av samtidigt, en tråd var: halva väntetiden med två skärmar.
+    std::thread::scope(|s| {
+        let jobs: Vec<_> = rects.iter().map(|r| s.spawn(move || one(r))).collect();
+        jobs.into_iter().filter_map(|j| j.join().ok().flatten()).collect()
+    })
 }
 
 /// Pekarens läge i skrivbordets enheter.

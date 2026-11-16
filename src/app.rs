@@ -43,6 +43,8 @@ enum Kind {
     /// Ett eget fönster med flikar som dragits ut ur huvudfönstret.
     Detached,
     Setup,
+    /// Ett osynligt fönster som håller grafiken igång, så att klippläget öppnas direkt.
+    Warm,
 }
 
 struct Win {
@@ -451,6 +453,20 @@ impl App {
         }
     }
 
+    /// Sätter upp grafiken direkt vid start, i ett osynligt litet fönster som får leva kvar.
+    /// Annars görs det vid första klippet, som då tar en knapp halv sekund att öppna.
+    fn warm_up(&mut self, el: &ActiveEventLoop) {
+        let mut attrs = Window::default_attributes().with_title("ForceShot").with_decorations(false).with_visible(false).with_inner_size(PhysicalSize::new(16, 16));
+        #[cfg(windows)]
+        {
+            use winit::platform::windows::WindowAttributesExtWindows;
+            attrs = attrs.with_skip_taskbar(true);
+        }
+        if let Some(id) = el.create_window(attrs).ok().and_then(|w| self.add_window(w, Kind::Warm)) {
+            self.paint(id, el);
+        }
+    }
+
     fn close_window(&mut self, id: WindowId) {
         if let Some(w) = self.wins.remove(&id) {
             let _ = pollster::block_on(self.painter.set_window(w.vid, None));
@@ -475,7 +491,11 @@ impl App {
             self.show_editor(el);
             return;
         }
+        let t0 = Instant::now();
         let shots = platform::capture_monitors(self.settings.include_cursor);
+        if std::env::var_os("FORCESHOT_TID").is_some() {
+            eprintln!("tid: skärmbild {} ms", t0.elapsed().as_millis());
+        }
         if shots.is_empty() {
             self.show_editor(el);
             return;
@@ -514,8 +534,17 @@ impl App {
     }
 
     fn open_overlay(&mut self, shots: Vec<Shot>, el: &ActiveEventLoop) {
+        let t0 = Instant::now();
+        let timing = std::env::var_os("FORCESHOT_TID").is_some();
+        let tick = |what: &str| {
+            if timing {
+                eprintln!("tid: {what} vid {} ms", t0.elapsed().as_millis());
+            }
+        };
         // Fönstren läses av innan överlägget läggs ovanpå dem.
         let windows = platform::window_rects();
+        tick("fönsterlista");
+
         let (cx, cy) = platform::cursor_pos();
         let mut focus = None;
         for (i, s) in shots.iter().enumerate() {
@@ -524,7 +553,7 @@ impl App {
                 .with_decorations(false)
                 .with_resizable(false)
                 // Fönstret visas först när den frusna bilden är ritad; annars blinkar en tom ruta till.
-                .with_visible(false)
+                .with_visible(std::env::var_os("FORCESHOT_SYNLIG").is_some())
                 .with_window_level(WindowLevel::AlwaysOnTop);
             attrs = if platform::LOGICAL_POSITIONS {
                 attrs.with_position(LogicalPosition::new(s.x, s.y)).with_inner_size(LogicalSize::new(s.w, s.h))
@@ -537,19 +566,23 @@ impl App {
                 attrs = attrs.with_skip_taskbar(true);
             }
             let Ok(window) = el.create_window(attrs) else { continue };
+            tick("fönster skapat");
             platform::prepare_overlay_window(&window);
-            if let Some(id) = self.add_window(window, Kind::Overlay(i)) {
+            let added = self.add_window(window, Kind::Overlay(i));
+            tick("rityta skapad");
+            if let Some(id) = added {
                 let inside = cx >= s.x && cy >= s.y && cx < s.x + s.w as i32 && cy < s.y + s.h as i32;
                 if inside || focus.is_none() {
                     focus = Some(id);
                 }
             }
         }
-        self.overlay = Some(Overlay::new(shots, windows, &self.settings));
+        self.overlay = Some(Overlay::new(shots, windows, cfg!(windows).then_some((cx, cy)), &self.settings));
         // Rita varje skärm en gång medan fönstren är gömda och visa dem sedan alla på en gång.
         let ids: Vec<WindowId> = self.wins.iter().filter(|(_, w)| matches!(w.kind, Kind::Overlay(_))).map(|(id, _)| *id).collect();
         for id in &ids {
             self.paint(*id, el);
+            tick("ritat");
         }
         for id in &ids {
             if let Some(w) = self.wins.get(id) {
@@ -557,9 +590,12 @@ impl App {
                 w.window.request_redraw();
             }
         }
+        tick("visat");
+
         if let Some(w) = focus.and_then(|id| self.wins.get(&id)) {
             platform::force_foreground(&w.window);
         }
+        tick("förgrund");
     }
 
     /// Tar hand om en färdig bild: redigera, kopiera eller spara.
@@ -632,6 +668,8 @@ impl App {
 
     fn paint(&mut self, id: WindowId, el: &ActiveEventLoop) {
         let Some(win) = self.wins.get_mut(&id) else { return };
+        let paint_start = Instant::now();
+        let paint_kind = win.kind;
         if std::env::var_os("FORCESHOT_LOGG").is_some() {
             match win.kind {
                 Kind::Editor => eprintln!("ritar redigeraren: {} flikar, synlig={:?}", self.editor.tabs.len(), win.window.is_visible()),
@@ -661,13 +699,18 @@ impl App {
                     s.ui(ui);
                 }
             }
+            Kind::Warm => {}
         });
         win.state.handle_platform_output(&window, out.platform_output);
         let prims = self.ctx.tessellate(out.shapes, out.pixels_per_point);
         self.pending.append(out.textures_delta);
         self.painter.paint_and_update_textures(win.vid, out.pixels_per_point, [0.07, 0.078, 0.094, 1.0], &prims, &mut self.pending, vec![], &window);
+        if let (Kind::Overlay(i), true) = (paint_kind, std::env::var_os("FORCESHOT_TID").is_some()) {
+            eprintln!("bild {i} {} {}", self.start.elapsed().as_millis(), paint_start.elapsed().as_micros());
+        }
 
         match kind {
+            Kind::Warm => {}
             Kind::Setup => {
                 if self.setup.as_ref().is_some_and(|s| s.done) {
                     el.exit();
@@ -714,6 +757,11 @@ impl App {
                     if self.editor_window().is_some_and(|w| w.window.is_visible() == Some(false)) {
                         self.show_editor(el);
                     }
+                    // Utvecklingsläge: öppna klippläget igen, för att mäta en varm start.
+                    if let Some(n) = std::env::var("FORCESHOT_OMKLIPP").ok().and_then(|v| v.parse::<u32>().ok()).filter(|n| *n > 0) {
+                        unsafe { std::env::set_var("FORCESHOT_OMKLIPP", (n - 1).to_string()) };
+                        self.start_capture(Action::Region, el);
+                    }
                 }
             }
         }
@@ -748,6 +796,7 @@ impl ApplicationHandler<UserEvent> for App {
         }
         self.build_tray();
         self.bind_hotkeys();
+        self.warm_up(el);
         {
             let proxy = self.proxy.clone();
             install::watch_inbox(move |lines| {
@@ -903,6 +952,7 @@ impl ApplicationHandler<UserEvent> for App {
                     self.close_overlay();
                 }
                 Kind::Setup => el.exit(),
+                Kind::Warm => {}
             },
             _ => {}
         }

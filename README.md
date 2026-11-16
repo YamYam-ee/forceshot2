@@ -48,9 +48,9 @@ version med en Setup-fil bifogad visas en ruta med *Ladda ner och uppdatera*,
 
 Så här lägger du upp en ny version:
 
-1. `.\build.ps1 -Version 2.2.4`
-2. Skapa en release i repot med taggen `v2.2.4`.
-3. Bifoga `dist\TRK ForceShot Setup 2.2.4.exe`.
+1. `.\build.ps1 -Version 2.2.5`
+2. Skapa en release i repot med taggen `v2.2.5`.
+3. Bifoga `dist\TRK ForceShot Setup 2.2.5.exe`.
 4. Beskrivningen är det användaren ser som "vad som är nytt".
 
 Version 1 har sitt eget repo för utgåvor (`YamYam-ee/forceshot`), så de två
