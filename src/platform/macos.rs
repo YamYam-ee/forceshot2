@@ -41,6 +41,20 @@ pub fn cursor_pos() -> (i32, i32) {
     (0, 0)
 }
 
+/// Klippfönster förbereds inte i förväg på Mac.
+pub fn monitor_list() -> Vec<[i32; 4]> {
+    Vec::new()
+}
+
+/// Musen fångas inte före klippfönstren på Mac.
+pub fn early_press() -> Option<((i32, i32), Option<(i32, i32)>)> {
+    None
+}
+
+pub fn early_idle_stop() {}
+
+pub fn early_cancel() {}
+
 pub fn active_window_rect() -> Option<(i32, i32, i32, i32)> {
     let windows = xcap::Window::all().ok()?;
     let w = windows.into_iter().find(|w| w.is_focused().unwrap_or(false))?;

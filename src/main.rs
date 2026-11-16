@@ -113,6 +113,8 @@ fn main() {
             }
             // Utvecklingslägen: öppna överlägget direkt, eller visa en provbild.
             "--klipp" => (startup.capture, dev) = (true, true),
+            // Ligger i bakgrunden bredvid en installerad version, för att prova snabbtangenterna.
+            "--bakgrund" => (startup.tray_only, dev) = (true, true),
             "--ocr" => (startup.ocr, dev) = (true, true),
             "--demo" => (startup.demo, dev) = (Some(None), true),
             "--fiberdemo" => (startup.dev, dev) = (Some(("fiber".into(), args.next().map(PathBuf::from))), true),

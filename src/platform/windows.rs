@@ -96,6 +96,11 @@ unsafe fn draw_cursor(dc: HDC, ox: i32, oy: i32) {
     }
 }
 
+/// Skärmarnas ramar i skrivbordets enheter (x, y, b, h).
+pub fn monitor_list() -> Vec<[i32; 4]> {
+    monitor_rects().iter().map(|r| [r.left, r.top, r.right - r.left, r.bottom - r.top]).collect()
+}
+
 /// En frusen bild per skärm.
 pub fn capture_monitors(include_cursor: bool) -> Vec<Shot> {
     let one = |r: &RECT| {
@@ -347,6 +352,9 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
                     .iter()
                     .find(|(c, vk, _)| *vk == info.vkCode && c.ctrl == ctrl && c.alt == alt && c.shift == shift && c.meta == meta);
                 if let Some((_, _, action)) = hit {
+                    if *action == Action::Region {
+                        early_arm();
+                    }
                     (state.send)(*action);
                     return 1; // tangenten är förbrukad
                 }
@@ -354,6 +362,85 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
         }
     }
     unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) }
+}
+
+// ----- Tidig mus -----
+// Från att klipptangenten trycks tills klippfönstren ligger på skärmen går det några
+// hundradelar. Under den tiden fångas vänster musknapp här, så att en dragning som börjar
+// direkt efter tangenten räknas från första stund och inte hamnar i fönstret under.
+
+struct Early {
+    hook: isize,
+    armed: std::time::Instant,
+    down: Option<(i32, i32)>,
+    up: Option<(i32, i32)>,
+}
+
+static EARLY: Mutex<Option<Early>> = Mutex::new(None);
+
+/// Körs i kroktråden, som har meddelandeloopen som en muskrok behöver.
+fn early_arm() {
+    let Ok(mut e) = EARLY.lock() else { return };
+    if e.is_some() {
+        return;
+    }
+    let hook = unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), GetModuleHandleW(std::ptr::null()), 0) };
+    if !hook.is_null() {
+        *e = Some(Early { hook: hook as isize, armed: std::time::Instant::now(), down: None, up: None });
+        if std::env::var_os("FORCESHOT_TID").is_some() {
+            eprintln!("tid: musen fångas");
+        }
+    }
+}
+
+unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code == HC_ACTION as i32 && (wparam as u32 == WM_LBUTTONDOWN || wparam as u32 == WM_LBUTTONUP) {
+        let info = unsafe { &*(lparam as *const MSLLHOOKSTRUCT) };
+        if let Ok(mut lock) = EARLY.lock() {
+            if let Some(e) = lock.as_mut() {
+                let pt = (info.pt.x, info.pt.y);
+                // Skulle klippläget aldrig öppnas ska musen inte vara död för det.
+                let fresh = e.armed.elapsed() < std::time::Duration::from_secs(3);
+                if wparam as u32 == WM_LBUTTONDOWN && e.down.is_none() && fresh {
+                    e.down = Some(pt);
+                    return 1;
+                }
+                if wparam as u32 == WM_LBUTTONUP && e.down.is_some() && e.up.is_none() {
+                    e.up = Some(pt);
+                    return 1;
+                }
+            }
+        }
+    }
+    unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) }
+}
+
+/// Ett musklick som kom innan klippfönstren fanns: var knappen trycktes ned och, om den
+/// redan släppts, var.
+pub fn early_press() -> Option<((i32, i32), Option<(i32, i32)>)> {
+    let e = EARLY.lock().ok()?;
+    let e = e.as_ref()?;
+    Some((e.down?, e.up))
+}
+
+fn early_off(only_idle: bool) {
+    let taken = match EARLY.lock() {
+        Ok(mut e) if e.as_ref().is_some_and(|e| !only_idle || e.down.is_none()) => e.take(),
+        _ => None,
+    };
+    if let Some(e) = taken {
+        unsafe { UnhookWindowsHookEx(e.hook as HHOOK) };
+    }
+}
+
+/// Klippfönstren tar emot musen själva nu. En dragning som redan börjat får löpa klart.
+pub fn early_idle_stop() {
+    early_off(true);
+}
+
+/// Släpper musen helt.
+pub fn early_cancel() {
+    early_off(false);
 }
 
 /// Globala snabbtangenter. Kroken lever i en egen tråd med meddelandeloop.

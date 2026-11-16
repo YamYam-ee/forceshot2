@@ -45,6 +45,8 @@ enum Kind {
     Setup,
     /// Ett osynligt fönster som håller grafiken igång, så att klippläget öppnas direkt.
     Warm,
+    /// Ett färdigt, gömt klippfönster som väntar på nästa klipp.
+    Spare,
 }
 
 struct Win {
@@ -87,6 +89,11 @@ pub struct App {
     hotkeys: Option<Hotkeys>,
     startup: Option<Startup>,
     next_vid: u64,
+    /// Gömda klippfönster med rityta, ett per skärm, och skärmens ram. De skapas i förväg
+    /// eftersom det är det som tar tid när klippläget öppnas.
+    spares: Vec<(WindowId, [i32; 4])>,
+    /// När nya klippfönster ska förberedas efter ett klipp.
+    refill_at: Option<Instant>,
     setup: Option<SetupUi>,
 }
 /// Installationsfönstrets tillstånd.
@@ -226,6 +233,8 @@ pub fn run(startup: Startup) {
         hotkeys: None,
         startup: Some(startup),
         next_vid: 1,
+        spares: Vec::new(),
+        refill_at: None,
         setup: None,
     };
     if let Err(e) = event_loop.run_app(&mut app) {
@@ -467,11 +476,59 @@ impl App {
         }
     }
 
+    fn overlay_attrs(rect: [i32; 4]) -> winit::window::WindowAttributes {
+        let [x, y, w, h] = rect;
+        let attrs = Window::default_attributes()
+            .with_title("ForceShot – markera")
+            .with_decorations(false)
+            .with_resizable(false)
+            // Fönstret visas först när den frusna bilden är ritad; annars blinkar en tom ruta till.
+            .with_visible(std::env::var_os("FORCESHOT_SYNLIG").is_some())
+            .with_window_level(WindowLevel::AlwaysOnTop);
+        let attrs = if platform::LOGICAL_POSITIONS {
+            attrs.with_position(LogicalPosition::new(x, y)).with_inner_size(LogicalSize::new(w, h))
+        } else {
+            attrs.with_position(PhysicalPosition::new(x, y)).with_inner_size(PhysicalSize::new(w.max(1) as u32, h.max(1) as u32))
+        };
+        #[cfg(windows)]
+        let attrs = {
+            use winit::platform::windows::WindowAttributesExtWindows;
+            attrs.with_skip_taskbar(true)
+        };
+        attrs
+    }
+
+    /// Ser till att det ligger ett färdigt klippfönster för varje skärm.
+    fn refill_spares(&mut self, el: &ActiveEventLoop) {
+        self.refill_at = None;
+        if self.overlay.is_some() {
+            return;
+        }
+        let rects = platform::monitor_list();
+        // Skärmar som kopplats ur eller bytt upplösning: de fönstren passar inte längre.
+        let stale: Vec<WindowId> = self.spares.iter().filter(|(_, r)| !rects.contains(r)).map(|(id, _)| *id).collect();
+        for id in stale {
+            self.close_window(id);
+        }
+        self.spares.retain(|(_, r)| rects.contains(r));
+        for r in rects {
+            if self.spares.iter().any(|(_, have)| *have == r) {
+                continue;
+            }
+            let Ok(window) = el.create_window(Self::overlay_attrs(r)) else { continue };
+            platform::prepare_overlay_window(&window);
+            if let Some(id) = self.add_window(window, Kind::Spare) {
+                self.spares.push((id, r));
+            }
+        }
+    }
+
     fn close_window(&mut self, id: WindowId) {
         if let Some(w) = self.wins.remove(&id) {
             let _ = pollster::block_on(self.painter.set_window(w.vid, None));
         }
         self.repaint_at.remove(&id);
+        self.spares.retain(|(s, _)| *s != id);
     }
 
     fn close_overlay(&mut self) -> Option<Overlay> {
@@ -479,13 +536,25 @@ impl App {
         for id in ids {
             self.close_window(id);
         }
+        platform::early_cancel();
+        // Nya fönster till nästa klipp, strax efter att det här är omhändertaget.
+        self.refill_at = Some(Instant::now() + Duration::from_millis(300));
         self.overlay.take()
     }
 
     fn start_capture(&mut self, action: Action, el: &ActiveEventLoop) {
         if self.overlay.is_some() {
+            // Klippläget är redan öppet och tar emot musen självt.
+            platform::early_idle_stop();
             return;
         }
+        self.capture_or_deliver(action, el);
+        if self.overlay.is_none() {
+            platform::early_cancel();
+        }
+    }
+
+    fn capture_or_deliver(&mut self, action: Action, el: &ActiveEventLoop) {
         if action == Action::OpenClipboard {
             self.editor.open_clipboard();
             self.show_editor(el);
@@ -548,28 +617,21 @@ impl App {
         let (cx, cy) = platform::cursor_pos();
         let mut focus = None;
         for (i, s) in shots.iter().enumerate() {
-            let mut attrs = Window::default_attributes()
-                .with_title("ForceShot – markera")
-                .with_decorations(false)
-                .with_resizable(false)
-                // Fönstret visas först när den frusna bilden är ritad; annars blinkar en tom ruta till.
-                .with_visible(std::env::var_os("FORCESHOT_SYNLIG").is_some())
-                .with_window_level(WindowLevel::AlwaysOnTop);
-            attrs = if platform::LOGICAL_POSITIONS {
-                attrs.with_position(LogicalPosition::new(s.x, s.y)).with_inner_size(LogicalSize::new(s.w, s.h))
-            } else {
-                attrs.with_position(PhysicalPosition::new(s.x, s.y)).with_inner_size(PhysicalSize::new(s.w, s.h))
+            let rect = [s.x, s.y, s.w as i32, s.h as i32];
+            // Helst ett fönster som redan ligger färdigt; annars skapas det nu.
+            let ready = self.spares.iter().position(|(_, r)| *r == rect).map(|n| self.spares.swap_remove(n).0);
+            let added = match ready {
+                Some(id) => self.wins.get_mut(&id).map(|w| {
+                    w.kind = Kind::Overlay(i);
+                    id
+                }),
+                None => {
+                    let Ok(window) = el.create_window(Self::overlay_attrs(rect)) else { continue };
+                    platform::prepare_overlay_window(&window);
+                    self.add_window(window, Kind::Overlay(i))
+                }
             };
-            #[cfg(windows)]
-            {
-                use winit::platform::windows::WindowAttributesExtWindows;
-                attrs = attrs.with_skip_taskbar(true);
-            }
-            let Ok(window) = el.create_window(attrs) else { continue };
-            tick("fönster skapat");
-            platform::prepare_overlay_window(&window);
-            let added = self.add_window(window, Kind::Overlay(i));
-            tick("rityta skapad");
+            tick(if ready.is_some() { "färdigt fönster" } else { "fönster skapat" });
             if let Some(id) = added {
                 let inside = cx >= s.x && cy >= s.y && cx < s.x + s.w as i32 && cy < s.y + s.h as i32;
                 if inside || focus.is_none() {
@@ -578,24 +640,24 @@ impl App {
             }
         }
         self.overlay = Some(Overlay::new(shots, windows, cfg!(windows).then_some((cx, cy)), &self.settings));
-        // Rita varje skärm en gång medan fönstren är gömda och visa dem sedan alla på en gång.
-        let ids: Vec<WindowId> = self.wins.iter().filter(|(_, w)| matches!(w.kind, Kind::Overlay(_))).map(|(id, _)| *id).collect();
+        // Varje skärm ritas medan fönstret är gömt och visas sedan. Skärmen med pekaren går
+        // först, så att den inte väntar på de andra.
+        let mut ids: Vec<WindowId> = self.wins.iter().filter(|(_, w)| matches!(w.kind, Kind::Overlay(_))).map(|(id, _)| *id).collect();
+        ids.sort_by_key(|id| Some(*id) != focus);
         for id in &ids {
             self.paint(*id, el);
             tick("ritat");
-        }
-        for id in &ids {
             if let Some(w) = self.wins.get(id) {
                 w.window.set_visible(true);
+                if Some(*id) == focus {
+                    platform::force_foreground(&w.window);
+                }
                 w.window.request_redraw();
             }
+            tick("visat");
         }
-        tick("visat");
-
-        if let Some(w) = focus.and_then(|id| self.wins.get(&id)) {
-            platform::force_foreground(&w.window);
-        }
-        tick("förgrund");
+        // Härifrån tar fönstren emot musen själva.
+        platform::early_idle_stop();
     }
 
     /// Tar hand om en färdig bild: redigera, kopiera eller spara.
@@ -699,7 +761,7 @@ impl App {
                     s.ui(ui);
                 }
             }
-            Kind::Warm => {}
+            Kind::Warm | Kind::Spare => {}
         });
         win.state.handle_platform_output(&window, out.platform_output);
         let prims = self.ctx.tessellate(out.shapes, out.pixels_per_point);
@@ -710,7 +772,7 @@ impl App {
         }
 
         match kind {
-            Kind::Warm => {}
+            Kind::Warm | Kind::Spare => {}
             Kind::Setup => {
                 if self.setup.as_ref().is_some_and(|s| s.done) {
                     el.exit();
@@ -797,6 +859,7 @@ impl ApplicationHandler<UserEvent> for App {
         self.build_tray();
         self.bind_hotkeys();
         self.warm_up(el);
+        self.refill_spares(el);
         {
             let proxy = self.proxy.clone();
             install::watch_inbox(move |lines| {
@@ -952,7 +1015,7 @@ impl ApplicationHandler<UserEvent> for App {
                     self.close_overlay();
                 }
                 Kind::Setup => el.exit(),
-                Kind::Warm => {}
+                Kind::Warm | Kind::Spare => {}
             },
             _ => {}
         }
@@ -960,7 +1023,10 @@ impl ApplicationHandler<UserEvent> for App {
 
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
         let now = Instant::now();
-        let mut next: Option<Instant> = None;
+        if self.refill_at.is_some_and(|t| t <= now) {
+            self.refill_spares(el);
+        }
+        let mut next: Option<Instant> = self.refill_at;
         self.repaint_at.retain(|id, at| {
             if *at <= now {
                 if let Some(w) = self.wins.get(id) {

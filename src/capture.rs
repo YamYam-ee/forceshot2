@@ -50,6 +50,9 @@ pub fn compose(shots: &[Shot], rect: [i32; 4]) -> RgbaImage {
     out
 }
 
+/// Dragningen ägs av ingen skärm: den började innan fönstren fanns.
+const EARLY: usize = usize::MAX;
+
 pub struct Overlay {
     pub shots: Vec<Shot>,
     textures: Vec<Option<TextureHandle>>,
@@ -139,7 +142,8 @@ impl Overlay {
         let Some(shot) = self.shots.get(i) else { return };
         let (iw, ih) = (shot.image.width() as f32, shot.image.height() as f32);
         let tex = self.textures[i].get_or_insert_with(|| {
-            let img = egui::ColorImage::from_rgba_unmultiplied([iw as usize, ih as usize], shot.image.as_raw());
+            // Skärmbilden är alltid helt täckande, så färgerna kan tas som de är.
+            let img = egui::ColorImage::from_rgba_premultiplied([iw as usize, ih as usize], shot.image.as_raw());
             let opts = egui::TextureOptions { magnification: egui::TextureFilter::Nearest, ..egui::TextureOptions::LINEAR };
             ctx.load_texture(format!("skarm-{i}"), img, opts)
         });
@@ -168,6 +172,38 @@ impl Overlay {
             self.changed = true;
         }
         let own = own.or_else(|| self.seed.filter(|p| home.contains(*p)).map(to_scr));
+        // Musknappen trycktes ned innan fönstret fanns: dragningen räknas därifrån.
+        if let Some((from, to)) = crate::platform::early_press() {
+            let at = |(x, y): (i32, i32)| clamp(pos2(x as f32, y as f32));
+            let from = at(from);
+            let p = at(to.unwrap_or_else(crate::platform::cursor_pos));
+            let r = Rect::from_two_pos(from, p);
+            let real = r.width() >= 3.0 && r.height() >= 3.0;
+            self.changed = true;
+            if to.is_none() {
+                self.drag_from = Some((EARLY, from));
+                self.cursor = Some(p);
+                self.sel = real.then_some(r);
+                self.from_click = false;
+                ctx.request_repaint();
+            } else {
+                crate::platform::early_cancel();
+                self.drag_from = None;
+                self.cursor = None;
+                if real {
+                    self.sel = Some(r);
+                    self.from_click = false;
+                    self.finish();
+                } else if let Some(w) = self.window_at(from) {
+                    // Ett klick utan dragning tar fönstret under pekaren.
+                    self.sel = Some(w);
+                    self.from_click = true;
+                    self.finish();
+                } else {
+                    self.sel = None;
+                }
+            }
+        }
         if resp.drag_started_by(egui::PointerButton::Primary) {
             if let Some(p) = ctx.input(|inp| inp.pointer.press_origin()) {
                 self.drag_from = Some((i, to_desk(p)));
