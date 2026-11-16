@@ -323,15 +323,20 @@ impl App {
         let mut attrs = Window::default_attributes()
             .with_title("TRK ForceShot")
             .with_inner_size(LogicalSize::new(1320.0, 860.0))
-            .with_min_inner_size(LogicalSize::new(820.0, 520.0));
+            .with_min_inner_size(LogicalSize::new(820.0, 520.0))
+            // Visas när första bilden är ritad, så att fönstret inte blinkar till tomt.
+            .with_visible(false);
         if let Some((rgba, w, h)) = icon_rgba(include_bytes!("../assets/icon-256.png")) {
             attrs = attrs.with_window_icon(winit::window::Icon::from_rgba(rgba, w, h).ok());
         }
         match el.create_window(attrs) {
             Ok(window) => {
                 if let Some(id) = self.add_window(window, Kind::Editor) {
+                    self.paint(id, el);
                     if let Some(w) = self.wins.get(&id) {
+                        w.window.set_visible(true);
                         platform::force_foreground(&w.window);
+                        w.window.request_redraw();
                     }
                 }
             }
@@ -417,6 +422,7 @@ impl App {
                     .with_title("TRK ForceShot")
                     .with_inner_size(size)
                     .with_min_inner_size(LogicalSize::new(820.0, 520.0))
+                    .with_visible(false)
                     .with_window_icon(Self::icon());
                 if let (Some((x, y)), Dest::Drop) = (point, dest) {
                     attrs = attrs.with_position(PhysicalPosition::new(x - 160, y - 24));
@@ -425,8 +431,11 @@ impl App {
                 match created {
                     Some(id) => {
                         self.extra.insert(id, Editor::detached_with(tab));
+                        self.paint(id, el);
                         if let Some(w) = self.wins.get(&id) {
+                            w.window.set_visible(true);
                             platform::force_foreground(&w.window);
+                            w.window.request_redraw();
                         }
                     }
                     None => {
@@ -514,6 +523,8 @@ impl App {
                 .with_title("ForceShot – markera")
                 .with_decorations(false)
                 .with_resizable(false)
+                // Fönstret visas först när den frusna bilden är ritad; annars blinkar en tom ruta till.
+                .with_visible(false)
                 .with_window_level(WindowLevel::AlwaysOnTop);
             attrs = if platform::LOGICAL_POSITIONS {
                 attrs.with_position(LogicalPosition::new(s.x, s.y)).with_inner_size(LogicalSize::new(s.w, s.h))
@@ -535,6 +546,17 @@ impl App {
             }
         }
         self.overlay = Some(Overlay::new(shots, windows, &self.settings));
+        // Rita varje skärm en gång medan fönstren är gömda och visa dem sedan alla på en gång.
+        let ids: Vec<WindowId> = self.wins.iter().filter(|(_, w)| matches!(w.kind, Kind::Overlay(_))).map(|(id, _)| *id).collect();
+        for id in &ids {
+            self.paint(*id, el);
+        }
+        for id in &ids {
+            if let Some(w) = self.wins.get(id) {
+                w.window.set_visible(true);
+                w.window.request_redraw();
+            }
+        }
         if let Some(w) = focus.and_then(|id| self.wins.get(&id)) {
             platform::force_foreground(&w.window);
         }

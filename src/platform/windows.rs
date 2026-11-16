@@ -290,8 +290,16 @@ pub fn force_foreground(window: &winit::window::Window) {
     }
 }
 
-/// Inget extra behövs på Windows; fönstret skapas redan överst och utan ram.
-pub fn prepare_overlay_window(_window: &winit::window::Window) {}
+/// Stänger av Windows öppnings- och stängningsanimation för överlägget. Annars zoomar
+/// den frusna skärmbilden in som en ruta innan den lägger sig på plats.
+pub fn prepare_overlay_window(window: &winit::window::Window) {
+    use windows_sys::Win32::Graphics::Dwm::{DWMWA_TRANSITIONS_FORCEDISABLED, DwmSetWindowAttribute};
+    let Some(hwnd) = hwnd_of(window) else { return };
+    let on: i32 = 1;
+    unsafe {
+        DwmSetWindowAttribute(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED as u32, &on as *const _ as *const _, 4);
+    }
+}
 
 fn vk_of(key: &str) -> Option<u32> {
     let k = key.to_ascii_uppercase();
