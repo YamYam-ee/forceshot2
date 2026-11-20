@@ -227,6 +227,40 @@ pub fn run(startup: Startup) {
         if std::env::var_os("WGPU_POWER_PREF").is_none() {
             new.power_preference = egui_wgpu::wgpu::PowerPreference::LowPower;
         }
+        // På Windows ritas det med DirectX 12. Med Vulkan fick klippfönstren på vissa datorer
+        // (AMD-grafik, skärmar via DisplayLink) vänta 2 s per skärm på en bild från
+        // drivrutinen strax efter att de visats. Vulkan finns kvar som reserv, och
+        // WGPU_BACKEND styr om som förut.
+        #[cfg(windows)]
+        if std::env::var_os("WGPU_BACKEND").is_none() {
+            use egui_wgpu::wgpu::{Backend, DeviceType, PowerPreference};
+            let power = new.power_preference;
+            new.native_adapter_selector = Some(Arc::new(move |adapters, surface| {
+                let rank = |a: &egui_wgpu::wgpu::Adapter| {
+                    let i = a.get_info();
+                    let backend = match i.backend {
+                        Backend::Dx12 => 0,
+                        Backend::Vulkan => 1,
+                        _ => 2,
+                    };
+                    let kind = match (i.device_type, power) {
+                        (DeviceType::DiscreteGpu, PowerPreference::HighPerformance) => 0,
+                        (DeviceType::IntegratedGpu, PowerPreference::HighPerformance) => 1,
+                        (DeviceType::IntegratedGpu, _) => 0,
+                        (DeviceType::DiscreteGpu, _) => 1,
+                        _ => 2,
+                    };
+                    // Programvaruritning sist, vilken väg den än går.
+                    (i.device_type == DeviceType::Cpu, backend, kind)
+                };
+                adapters
+                    .iter()
+                    .filter(|a| surface.is_none_or(|s| a.is_surface_supported(s)))
+                    .min_by_key(|a| rank(a))
+                    .cloned()
+                    .ok_or_else(|| "Hittade inget grafikkort att rita med.".to_string())
+            }));
+        }
     }
     let painter = pollster::block_on(Painter::new(ctx.clone(), gpu, false, egui_wgpu::RendererOptions::default()));
     let mut app = App {
