@@ -426,10 +426,18 @@ impl App {
     /// Ett fönster som varit gömt får en ny rityta. Den gamla slutar visa nya bilder när
     /// fönstret göms, och då står den sista bilden kvar fast allt ritas som vanligt.
     fn revive(&mut self, vid: ViewportId, window: &Arc<Window>) {
-        let _ = pollster::block_on(self.painter.set_window(vid, None));
+        self.drop_surface(vid);
         if let Err(e) = pollster::block_on(self.painter.set_window(vid, Some(window.clone()))) {
             log::error!("Kunde inte skapa ritytan på nytt: {e}");
         }
+    }
+
+    /// Släpper ritytan för ett enda fönster. `Painter::set_window(vid, None)` går inte att
+    /// använda till det: den tömmer ytorna för alla fönster, och då slutar de andra att
+    /// ritas (till exempel klippfönstren som ligger färdiga när redigeraren stängs).
+    fn drop_surface(&mut self, vid: ViewportId) {
+        let keep: egui::ViewportIdSet = self.wins.values().map(|w| w.vid).filter(|v| *v != vid).collect();
+        self.painter.gc_viewports(&keep);
     }
 
     fn icon() -> Option<winit::window::Icon> {
@@ -603,7 +611,7 @@ impl App {
 
     fn close_window(&mut self, id: WindowId) {
         if let Some(w) = self.wins.remove(&id) {
-            let _ = pollster::block_on(self.painter.set_window(w.vid, None));
+            self.drop_surface(w.vid);
         }
         self.repaint_at.remove(&id);
         self.spares.retain(|(s, _)| *s != id);
