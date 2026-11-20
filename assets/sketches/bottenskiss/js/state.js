@@ -6,7 +6,7 @@
 function defaultDoc() {
   return {
     v: 1,
-    meta: { objekt: '', cistern: '', datum: today(), ritad: '', tjocklek: '', anm: '' },
+    meta: { objekt: '', cistern: '', datum: today(), ritad: '', tjocklek: '', yta: '', anm: '' },
     tank: { diameter: 12000, orientation: 'h' },
     ring: { on: true, count: 20, width: 1000, rot: 0, angles: null },
     layout: {
@@ -18,7 +18,7 @@ function defaultDoc() {
     },
     view: {
       ids: true, refs: true, sheet: true, table: true, north: true, snap: true,
-      dimDia: true, dimPlate: true, rot: 0, northPos: null, northRot: 0,
+      dimDia: true, dimPlate: true, rot: 0, pageRot: 0, northPos: null, northRot: 0,
       flipRows: false, flipCols: false
     },
     items: [],

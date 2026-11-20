@@ -142,10 +142,67 @@ function pointInRect(p, r, pad) {
   return p.x >= r.x - q && p.x <= r.x + r.w + q && p.y >= r.y - q && p.y <= r.y + r.h + q;
 }
 
+/* ---------- vridna rektanglar ----------
+   En rektangel kan ha `rot` (grader, medurs på ritningen) kring sin mittpunkt.
+   x, y, w, h beskriver den ovridna rektangeln, så måtten står kvar när den vrids. */
+const isRot = s => !!(s && s.kind === 'rect' && s.rot);
+function rectCenter(s) { return { x: s.x + s.w / 2, y: s.y + s.h / 2 }; }
+function rotAround(p, c, deg) {
+  const a = deg * D2R, cs = Math.cos(a), sn = Math.sin(a);
+  return { x: c.x + (p.x - c.x) * cs - (p.y - c.y) * sn, y: c.y + (p.x - c.x) * sn + (p.y - c.y) * cs };
+}
+/** hörnen på ritningen */
+function rectCorners(s) {
+  const c = rectCenter(s);
+  return s.rot ? rectPoly(s).map(q => rotAround(q, c, s.rot)) : rectPoly(s);
+}
+/** en punkt på ritningen -> rektangelns eget, ovridna system */
+function toRectLocal(s, p) { return s.rot ? rotAround(p, rectCenter(s), -s.rot) : p; }
+/** verkliga mått (inte den omskrivna rutan) */
+function shapeDims(s) {
+  if (s.kind === 'rect') return { w: Math.abs(s.w), h: Math.abs(s.h) };
+  const b = shapeBBox(s);
+  return { w: b.w, h: b.h };
+}
+function segsCross(a, b, c, d) {
+  const o = (p, q, r) => (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+  const o1 = o(a, b, c), o2 = o(a, b, d), o3 = o(c, d, a), o4 = o(c, d, b);
+  return ((o1 > 0) !== (o2 > 0)) && ((o3 > 0) !== (o4 > 0));
+}
+function polysTouch(A, B, t) {
+  for (const q of A) if (pointInPoly(q, B) || nearPoly(q, B) <= t) return true;
+  for (const q of B) if (pointInPoly(q, A) || nearPoly(q, A) <= t) return true;
+  for (let i = 0; i < A.length; i++) for (let j = 0; j < B.length; j++)
+    if (segsCross(A[i], A[(i + 1) % A.length], B[j], B[(j + 1) % B.length])) return true;
+  return false;
+}
+/** Drar i ett handtag på en vriden rektangel. `s0` är formen när dragningen började,
+    `h` handtaget (hx, hy = 0|1|2) och `p` pekaren på ritningen. */
+function resizeRotRect(s, s0, h, p) {
+  const c0 = rectCenter(s0), q = toRectLocal(s0, p);
+  let x0 = s0.x, y0 = s0.y, x1 = s0.x + s0.w, y1 = s0.y + s0.h;
+  if (h.hx === 0) x0 = Math.min(q.x, x1 - 1); if (h.hx === 2) x1 = Math.max(q.x, x0 + 1);
+  if (h.hy === 0) y0 = Math.min(q.y, y1 - 1); if (h.hy === 2) y1 = Math.max(q.y, y0 + 1);
+  const w = x1 - x0, hh = y1 - y0;
+  /* den nya mitten, tillbaka till ritningen: motstående sida står då still */
+  const c = rotAround({ x: (x0 + x1) / 2, y: (y0 + y1) / 2 }, c0, s0.rot);
+  s.x = c.x - w / 2; s.y = c.y - hh / 2; s.w = w; s.h = hh;
+}
+
 /** Snittest mellan två former (rect|circle) för sammanslagning av dubblingar */
 function shapesTouch(a, b, tol) {
   const t = tol || 0;
   if (a.kind === 'arc' || b.kind === 'arc') return rectsOverlap(shapeBBox(a), shapeBBox(b), t);
+  if (isRot(a) || isRot(b)) {
+    if (a.kind === 'rect' && b.kind === 'rect') return polysTouch(rectCorners(a), rectCorners(b), t);
+    const rr = a.kind === 'rect' ? a : b, cc = a.kind === 'rect' ? b : a;
+    if (cc.kind === 'circle') {
+      const q = toRectLocal(rr, { x: cc.cx, y: cc.cy });
+      const nx = clamp(q.x, rr.x, rr.x + rr.w), ny = clamp(q.y, rr.y, rr.y + rr.h);
+      return dist2(nx, ny, q.x, q.y) <= cc.r + t;
+    }
+    return rectsOverlap(shapeBBox(a), shapeBBox(b), t);
+  }
   if (a.kind === 'rect' && b.kind === 'rect') return rectsOverlap(a, b, t);
   if (a.kind === 'circle' && b.kind === 'circle') return dist2(a.cx, a.cy, b.cx, b.cy) <= a.r + b.r + t;
   const r = a.kind === 'rect' ? a : b, c = a.kind === 'rect' ? b : a;
@@ -167,6 +224,7 @@ function shapeBBox(s) {
   if (s.kind === 'arc') return polyBBox(arcPts(s));
   if (s.kind === 'circle') return { x: s.cx - s.r, y: s.cy - s.r, w: s.r * 2, h: s.r * 2 };
   if (s.kind === 'poly') return polyBBox(s.pts);
+  if (isRot(s)) { const b = polyBBox(rectCorners(s)); return { x: b.x, y: b.y, w: b.w, h: b.h }; }
   return { x: s.x, y: s.y, w: s.w, h: s.h };
 }
 function shapesBBox(list) {
@@ -202,7 +260,7 @@ function shapeHit(s, p, tol) {
   }
   if (s.kind === 'circle') return dist2(p.x, p.y, s.cx, s.cy) <= s.r + t;
   if (s.kind === 'poly') return pointInPoly(p, s.pts) || nearPoly(p, s.pts) <= t;
-  return pointInRect(p, s, t);
+  return pointInRect(toRectLocal(s, p), s, t);
 }
 function nearPoly(p, pts) {
   let d = Infinity;
@@ -242,6 +300,7 @@ function shapePath(s) {
     return 'M' + (s.cx - r) + ' ' + s.cy + 'a' + r + ' ' + r + ' 0 1 0 ' + (r * 2) + ' 0a' + r + ' ' + r + ' 0 1 0 ' + (-r * 2) + ' 0Z';
   }
   if (s.kind === 'poly') return polyPath(s.pts);
+  if (isRot(s)) return polyPath(rectCorners(s));
   return 'M' + s.x + ' ' + s.y + 'h' + s.w + 'v' + s.h + 'h' + (-s.w) + 'Z';
 }
 function polyPath(pts, open) {

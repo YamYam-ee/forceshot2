@@ -13,6 +13,8 @@ const Panels = (function () {
   function markRotQuick() {
     const r = State.doc.view.rot || 0;
     $$('#v-rot-q button').forEach(b => b.classList.toggle('on', +b.dataset.r === r));
+    const pr = State.doc.view.pageRot || 0;
+    $$('#v-page-q button').forEach(b => b.classList.toggle('on', +b.dataset.r === pr));
   }
 
   /* ---------------- bindningar ---------------- */
@@ -25,6 +27,14 @@ const Panels = (function () {
     bindText('#m-datum', v => State.doc.meta.datum = v, () => State.doc.meta.datum, true);
     bindText('#m-ritad', v => State.doc.meta.ritad = v, () => State.doc.meta.ritad, true);
     bindText('#c-tjock', v => State.doc.meta.tjocklek = v, () => State.doc.meta.tjocklek, true);
+    bindText('#c-yta', v => State.doc.meta.yta = v, () => State.doc.meta.yta, true);
+    $$('#v-page-q button').forEach(b => b.addEventListener('click', e => {
+      e.preventDefault();
+      State.doc.view.pageRot = +b.dataset.r;
+      markRotQuick();
+      Render.applyView(); Render.fit();
+      State.commit('vrid bild');
+    }));
 
     /* cistern */
     bindNum('#c-dia', v => State.doc.tank.diameter = clamp(v, 500, 200000), () => State.doc.tank.diameter);
@@ -193,6 +203,7 @@ const Panels = (function () {
     $('#m-datum').value = d.meta.datum || '';
     $('#m-ritad').value = d.meta.ritad || '';
     $('#c-tjock').value = d.meta.tjocklek || '';
+    $('#c-yta').value = d.meta.yta || '';
     $('#c-dia').value = d.tank.diameter;
     $$('#c-orient button').forEach(b => b.classList.toggle('on', b.dataset.v === d.tank.orientation));
     $('#r-on').checked = !!d.ring.on;
@@ -353,9 +364,25 @@ const Panels = (function () {
       const s = it.shape;
       if (s.kind === 'rect') {
         const g = H('div', { class: 'grid2' });
-        g.appendChild(H('label', { class: 'fld' }, [H('span', { text: 'Bredd (mm)' }), numf(Math.round(s.w), v => { s.w = v; upd(); }, 10)]));
-        g.appendChild(H('label', { class: 'fld' }, [H('span', { text: 'Höjd (mm)' }), numf(Math.round(s.h), v => { s.h = v; upd(); }, 10)]));
+        /* en vriden rektangel växer kring sin mitt, annars skulle den vandra iväg */
+        const setW = v => { if (s.rot) s.x += (s.w - v) / 2; s.w = v; upd(); };
+        const setH = v => { if (s.rot) s.y += (s.h - v) / 2; s.h = v; upd(); };
+        g.appendChild(H('label', { class: 'fld' }, [H('span', { text: 'Bredd (mm)' }), numf(Math.round(s.w), setW, 10)]));
+        g.appendChild(H('label', { class: 'fld' }, [H('span', { text: 'Höjd (mm)' }), numf(Math.round(s.h), setH, 10)]));
         host.appendChild(g);
+        const deg0 = Math.round((((s.rot || 0) % 360) + 360) % 360);
+        const rsl = H('input', { type: 'range', min: 0, max: 359, step: 1, value: deg0 });
+        const rlbl = H('b', { text: deg0 + '°' });
+        const setRot = v => { if (v) s.rot = v; else delete s.rot; rsl.value = v; rlbl.textContent = v + '°'; upd(); };
+        rsl.addEventListener('input', () => setRot(+rsl.value));
+        rsl.addEventListener('change', () => State.commit('vrid'));
+        const rq = H('div', { class: 'segmented tiny' });
+        [0, 45, 90, 135].forEach(v => {
+          const b = H('button', { text: v + '°' });
+          b.onclick = e => { e.preventDefault(); setRot(v); State.commit('vrid'); };
+          rq.appendChild(b);
+        });
+        host.appendChild(H('label', { class: 'fld' }, [H('span', {}, ['Vridning ', rlbl]), rsl, rq]));
       } else if (s.kind === 'circle') {
         add('Diameter (mm)', numf(Math.round(s.r * 2), v => { s.r = Math.max(1, v / 2); upd(); }, 10));
       } else if (s.kind === 'arc') {

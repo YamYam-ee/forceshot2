@@ -118,9 +118,18 @@ const Render = (function () {
   }
 
   const vrot = () => (State.doc && State.doc.view.rot) || 0;
+  /** hela bilden vriden i kvartsvarv (blad, namnruta och allt) */
+  const prot = () => (State.doc && State.doc.view.pageRot) || 0;
+  const pageTurn = (p, deg) => rotAround(p, { x: 0, y: 0 }, deg);
+  /** rutan som ett blad upptar när hela bilden är vriden */
+  function turnedBox(sh, deg) {
+    if (!deg) return sh;
+    const b = polyBBox(rectPoly(sh).map(q => pageTurn(q, deg)));
+    return { x: b.x, y: b.y, w: b.w, h: b.h };
+  }
 
   function applyView() {
-    world.setAttribute('transform', 'translate(' + view.tx + ' ' + view.ty + ') scale(' + view.s + ')');
+    world.setAttribute('transform', 'translate(' + view.tx + ' ' + view.ty + ') scale(' + view.s + ')' + (prot() ? ' rotate(' + prot() + ')' : ''));
     gRot.setAttribute('transform', 'rotate(' + vrot() + ')');
   }
   function screenSize(px) { return px / view.s; }
@@ -134,7 +143,8 @@ const Render = (function () {
   /** skärm -> bladkoordinater (utan vy-vridning) */
   function toSheet(clientX, clientY) {
     const r = svg.getBoundingClientRect();
-    return { x: (clientX - r.left - view.tx) / view.s, y: (clientY - r.top - view.ty) / view.s };
+    const q = { x: (clientX - r.left - view.tx) / view.s, y: (clientY - r.top - view.ty) / view.s };
+    return prot() ? pageTurn(q, -prot()) : q;
   }
   function modelToSheet(p) {
     const a = vrot() * D2R, c = Math.cos(a), s = Math.sin(a);
@@ -144,7 +154,7 @@ const Render = (function () {
   function fit(pad) {
     const geo = State.geo; if (!geo) return;
     const r = svg.getBoundingClientRect();
-    const sh = State.doc.view.sheet ? geo.sheet : { x: -geo.R * 1.2, y: -geo.R * 1.2, w: geo.R * 2.4, h: geo.R * 2.4 };
+    const sh = turnedBox(State.doc.view.sheet ? geo.sheet : { x: -geo.R * 1.2, y: -geo.R * 1.2, w: geo.R * 2.4, h: geo.R * 2.4 }, prot());
     const m = pad === undefined ? 28 : pad;
     const s = Math.min((r.width - m * 2) / sh.w, (r.height - m * 2 - 22) / sh.h);
     view.s = s;
@@ -168,7 +178,7 @@ const Render = (function () {
   /** centrera vyn på en modellpunkt */
   function centerOn(p) {
     const r = svg.getBoundingClientRect();
-    const q = modelToSheet(p);
+    const q = pageTurn(modelToSheet(p), prot());
     view.tx = r.width / 2 - q.x * view.s;
     view.ty = (r.height - 20) / 2 - q.y * view.s;
     applyView(); drawOverlayRefresh();
@@ -208,7 +218,7 @@ const Render = (function () {
     }));
 
     const col = sh.col;
-    const titleH = R * 0.46, legH = R * 0.31;
+    const titleH = R * 0.575, legH = R * 0.31;
     const tX = col.x, tW = col.w;
     const titleY = col.y + col.h - titleH;
     const legY = titleY - legH - R * 0.05;
@@ -216,9 +226,9 @@ const Render = (function () {
     /* namnruta */
     const tb = S('g');
     tb.appendChild(S('rect', { x: tX, y: titleY, width: tW, height: titleH, fill: 'none', stroke: INK, 'stroke-width': geo.lw.base * 1.5 }));
-    const rowH = titleH / 4;
-    for (let i = 1; i < 4; i++) tb.appendChild(S('line', { x1: tX, y1: titleY + rowH * i, x2: tX + tW, y2: titleY + rowH * i, stroke: INK, 'stroke-width': geo.lw.base * .8 }));
-    tb.appendChild(S('line', { x1: tX + tW * .42, y1: titleY + rowH, x2: tX + tW * .42, y2: titleY + titleH, stroke: INK, 'stroke-width': geo.lw.base * .8 }));
+    const rowH = titleH / 5;
+    for (let i = 1; i < 5; i++) tb.appendChild(S('line', { x1: tX, y1: titleY + rowH * i, x2: tX + tW, y2: titleY + rowH * i, stroke: INK, 'stroke-width': geo.lw.base * .8 }));
+    tb.appendChild(S('line', { x1: tX + tW * .42, y1: titleY + rowH, x2: tX + tW * .42, y2: titleY + rowH * 4, stroke: INK, 'stroke-width': geo.lw.base * .8 }));
 
     const cellTxt = (x, y, lab, val, big) => {
       const gg = S('g');
@@ -233,13 +243,14 @@ const Render = (function () {
       return gg;
     };
     const m = doc.meta;
-    tb.appendChild(cellTxt(tX, titleY, 'OBJEKT', m.objekt || '—', true));
+    tb.appendChild(cellTxt(tX, titleY, 'PLATS', m.objekt || '—', true));
     tb.appendChild(cellTxt(tX, titleY + rowH, 'CISTERN / TANK', m.cistern || '—'));
     tb.appendChild(cellTxt(tX + tW * .42, titleY + rowH, 'BOTTENPLÅT', m.tjocklek || '—'));
     tb.appendChild(cellTxt(tX, titleY + rowH * 2, 'RITAD AV', m.ritad || '—'));
     tb.appendChild(cellTxt(tX + tW * .42, titleY + rowH * 2, 'DATUM', m.datum || '—'));
     tb.appendChild(cellTxt(tX, titleY + rowH * 3, 'DIAMETER', doc.view.dimDia ? 'Ø ' + mm(geo.R * 2) + ' mm' : '—'));
     tb.appendChild(cellTxt(tX + tW * .42, titleY + rowH * 3, 'PLÅTMÅTT', doc.view.dimPlate ? mm(geo.L) + ' × ' + mm(geo.bandH) + ' mm' : '—'));
+    tb.appendChild(cellTxt(tX, titleY + rowH * 4, 'YTA', m.yta || '—'));
     g.appendChild(tb);
 
     /* teckenförklaring */
@@ -674,6 +685,12 @@ const Render = (function () {
           'stroke-dasharray': screenSize(6) + ' ' + screenSize(4)
         }));
         handlePoints(it).forEach(h => g.appendChild(handle(h.x, h.y, hs)));
+      } else if (isRot(it.shape)) {
+        g.appendChild(S('path', {
+          d: shapePath(it.shape), fill: 'none', stroke: BLUE, 'stroke-width': screenSize(1.2),
+          'stroke-dasharray': screenSize(5) + ' ' + screenSize(4)
+        }));
+        handlePoints(it).forEach(h => g.appendChild(handle(h.x, h.y, hs)));
       } else {
         const b = Item.bbox(it);
         const pad = screenSize(3);
@@ -703,12 +720,15 @@ const Render = (function () {
         { x: Math.cos(sh.a1) * rm, y: Math.sin(sh.a1) * rm, arcEnd: 1 }
       ];
     }
-    const b = Item.bbox(it);
+    /* en vriden rektangel har handtagen på sina egna hörn och sidor */
+    const turned = isRot(sh);
+    const b = turned ? { x: sh.x, y: sh.y, w: sh.w, h: sh.h } : Item.bbox(it);
     const hx = [b.x, b.x + b.w / 2, b.x + b.w], hy = [b.y, b.y + b.h / 2, b.y + b.h];
     const out = [];
     for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
       if (i === 1 && j === 1) continue;
-      out.push({ x: hx[i], y: hy[j], hx: i, hy: j });
+      const q = turned ? rotAround({ x: hx[i], y: hy[j] }, rectCenter(sh), sh.rot) : { x: hx[i], y: hy[j] };
+      out.push({ x: q.x, y: q.y, hx: i, hy: j });
     }
     return out;
   }
@@ -741,11 +761,16 @@ const Render = (function () {
     const geo = State.geo, doc = State.doc;
     const sh = doc.view.sheet ? geo.sheet : { x: -geo.R * 1.25, y: -geo.R * 1.25, w: geo.R * 2.5, h: geo.R * 2.5 };
     const px = 1600 * (scale || 1);
-    const out = S('svg', {
+    /* hela bilden kan vara vriden i kvartsvarv: då byter bladet bredd och höjd */
+    const pr = doc.view.pageRot || 0;
+    const box = turnedBox(sh, pr);
+    const svgOut = S('svg', {
       xmlns: SVGNS, version: '1.1',
-      viewBox: r2(sh.x) + ' ' + r2(sh.y) + ' ' + r2(sh.w) + ' ' + r2(sh.h),
-      width: Math.round(px), height: Math.round(px * sh.h / sh.w)
+      viewBox: r2(box.x) + ' ' + r2(box.y) + ' ' + r2(box.w) + ' ' + r2(box.h),
+      width: Math.round(px), height: Math.round(px * box.h / box.w)
     });
+    const out = pr ? S('g', { transform: 'rotate(' + pr + ')' }) : svgOut;
+    if (pr) svgOut.appendChild(out);
     out.appendChild(S('rect', { x: sh.x, y: sh.y, width: sh.w, height: sh.h, fill: '#ffffff' }));
     out.appendChild(buildDefs(geo));
     if (doc.view.sheet) out.appendChild(buildSheet(geo, doc));
@@ -754,7 +779,7 @@ const Render = (function () {
     rg.appendChild(buildTank(geo, doc));
     rg.appendChild(buildItems(geo, doc));
     out.appendChild(rg);
-    return out;
+    return svgOut;
   }
 
   return {
@@ -796,7 +821,7 @@ function reportRows() {
   const plateOr = (p, stored) => { const pl = Geo.plateAt(geo, p); return pl ? pl.label : (stored || '–'); };
 
   doc.items.filter(i => i.type === 'repair').sort((a, b) => a.seq - b.seq).forEach(it => {
-    const b = shapeBBox(it.shape), c = shapeCenter(it.shape);
+    const b = shapeDims(it.shape), c = shapeCenter(it.shape);
     rows.push({
       id: it.id, n: num[it.id], typ: it.kindName || 'Reparation',
       plat: it.shape.kind === 'arc' ? ringSpan(it.shape) : plateOr(c, it.plateId),
@@ -806,7 +831,7 @@ function reportRows() {
     });
   });
   State.groups().forEach((grp, gi) => {
-    const b = shapesBBox(grp.shapes);
+    const b = grp.shapes.length === 1 ? shapeDims(grp.shapes[0]) : shapesBBox(grp.shapes);
     const c = shapeCenter(grp.shapes[0]);
     const hide = grp.items.every(i => i.hideDims);
     const notes = grp.items.map(i => i.note).filter(Boolean).join('; ');

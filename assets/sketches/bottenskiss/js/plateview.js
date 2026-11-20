@@ -263,6 +263,10 @@ const PlateView = (function () {
       Item.move(drag.it, p.x - drag.last.x, p.y - drag.last.y);
       drag.last = p; drag.moved = true; draw(); return;
     }
+    if (drag.kind === 'resize' && isRot(drag.s0)) {
+      resizeRotRect(drag.it.shape, drag.s0, drag.h, p);
+      drag.moved = true; draw(); return;
+    }
     if (drag.kind === 'resize') {
       const b = drag.b0, h = drag.h;
       let x0 = b.x, y0 = b.y, x1 = b.x + b.w, y1 = b.y + b.h;
@@ -365,7 +369,7 @@ const PlateView = (function () {
 
     const it = selId ? State.byId(selId) : null;
     if (it) {
-      const c = Item.pos(it), b = Item.bbox(it);
+      const c = Item.pos(it), b = (it.shape && typeof it.shape === 'object') ? shapeDims(it.shape) : Item.bbox(it);
       const info = H('div', { class: 'pv-readout' });
       let html = '<b>' + (nums[it.id] ? nums[it.id] + ' · ' : '') + (it.type === 'repair' ? 'Reparation' : it.type === 'doubler' ? 'Dubbling' : it.type === 'point' ? 'Mätpunkt' : it.type) + '</b>';
       if (plate.kind !== 'ring') {

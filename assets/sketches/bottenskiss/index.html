@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bottenskiss – cisternbottnar</title>
-<link rel="stylesheet" href="css/app.css?v=6">
+<link rel="stylesheet" href="css/app.css?v=7">
 </head>
 <body>
 
@@ -24,7 +24,7 @@
     </div>
 
     <div class="topfields">
-      <label class="tf"><span>Objekt</span><input id="m-objekt" type="text" placeholder="t.ex. OKQ8 Malmö depå"></label>
+      <label class="tf"><span>Plats</span><input id="m-objekt" type="text" placeholder="t.ex. OKQ8 Malmö depå"></label>
       <label class="tf"><span>Cistern</span><input id="m-cistern" type="text" placeholder="C314"></label>
       <label class="tf sm"><span>Datum</span><input id="m-datum" type="text"></label>
       <label class="tf sm"><span>Ritad av</span><input id="m-ritad" type="text"></label>
@@ -64,6 +64,12 @@
           <label class="fld"><span>Diameter (mm)</span><input id="c-dia" type="number" min="500" step="100" value="12000"></label>
           <label class="fld"><span>Bottentjocklek</span><input id="c-tjock" type="text" placeholder="6 mm"></label>
         </div>
+        <label class="fld"><span>Yta</span><input id="c-yta" type="text" list="yta-list" placeholder="t.ex. Målad">
+          <datalist id="yta-list">
+            <option value="Målad"></option><option value="Omålad"></option><option value="Blästrad"></option>
+            <option value="Belagd"></option><option value="Laminerad"></option>
+          </datalist>
+        </label>
         <label class="fld"><span>Plåtriktning</span>
           <div class="segmented" id="c-orient">
             <button data-v="h" class="on">Liggande rader</button>
@@ -78,6 +84,14 @@
             <button data-r="180">180°</button><button data-r="270">270°</button>
           </div>
           <small class="hint">Vrider hela skissen som en kompass – texter står kvar upprätt</small>
+        </label>
+        <label class="fld">
+          <span>Vrid hela bilden</span>
+          <div class="segmented tiny" id="v-page-q">
+            <button data-r="0">0°</button><button data-r="90">90°</button>
+            <button data-r="180">180°</button><button data-r="270">270°</button>
+          </div>
+          <small class="hint">Vrider hela ritningen med namnruta och tabell, även när den sparas eller exporteras</small>
         </label>
       </section>
 
@@ -273,14 +287,14 @@
 
 <input type="file" id="file-input" accept=".json,.botten.json" hidden>
 
-<script src="js/util.js?v=6"></script>
-<script src="js/geometry.js?v=6"></script>
-<script src="js/state.js?v=6"></script>
-<script src="js/render.js?v=6"></script>
-<script src="js/tools.js?v=6"></script>
-<script src="js/panels.js?v=6"></script>
-<script src="js/plateview.js?v=6"></script>
-<script src="js/io.js?v=6"></script>
-<script src="js/app.js?v=6"></script>
+<script src="js/util.js?v=7"></script>
+<script src="js/geometry.js?v=7"></script>
+<script src="js/state.js?v=7"></script>
+<script src="js/render.js?v=7"></script>
+<script src="js/tools.js?v=7"></script>
+<script src="js/panels.js?v=7"></script>
+<script src="js/plateview.js?v=7"></script>
+<script src="js/io.js?v=7"></script>
+<script src="js/app.js?v=7"></script>
 </body>
 </html>

@@ -96,7 +96,7 @@ const IO = (function () {
     const head = ['Nr', 'Typ', 'Plåt', 'Mått (mm)', 'Tjocklek', 'Anmärkning'];
     const esc = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
     let out = 'sep=;\n';
-    out += [esc('Objekt'), esc(m.objekt), esc('Cistern'), esc(m.cistern), esc('Datum'), esc(m.datum)].join(';') + '\n\n';
+    out += [esc('Plats'), esc(m.objekt), esc('Cistern'), esc(m.cistern), esc('Yta'), esc(m.yta), esc('Datum'), esc(m.datum)].join(';') + '\n\n';
     out += head.map(esc).join(';') + '\n';
     rows.forEach(r => { out += [r.n, r.typ, r.plat, r.matt, r.tj, r.anm].map(esc).join(';') + '\n'; });
     download(new Blob(['﻿' + out], { type: 'text/csv;charset=utf-8' }), baseName() + '_anmarkningar.csv');

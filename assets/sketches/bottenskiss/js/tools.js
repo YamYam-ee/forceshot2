@@ -617,6 +617,7 @@ const Tools = (function () {
       else s.a1 = clamp(a, s.a0 + minS, s.a0 + maxS);
       return;
     }
+    if (isRot(d.s0)) { resizeRotRect(it.shape, d.s0, h, p); return; }
     const g = Snap.grid(p, alt);
     const b = Object.assign({}, d.b0);
     let x0 = b.x, y0 = b.y, x1 = b.x + b.w, y1 = b.y + b.h;
